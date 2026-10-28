@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/t/:type/:id", "destination": "/api/title?type=:type&id=:id" }
+  ],
+  "functions": {
+    "api/title.js": { "includeFiles": "index.html" }
+  }
+}
