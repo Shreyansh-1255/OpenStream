@@ -33,8 +33,8 @@
 Every movie or series page has a clean, shareable URL:
 
 ```
-https://YOUR-PROJECT.vercel.app/t/movie/tt0120157
-https://YOUR-PROJECT.vercel.app/t/series/tt0944947
+https://openstream-tv.vercel.app//t/movie/tt0120157
+https://openstream-tv.vercel.app//t/series/tt0944947
 ```
 
 Just copy the URL from the browser's address bar and send it. Messaging apps don't run JavaScript, so a small Vercel serverless function (`api/title.js`) fetches the title's metadata from Cinemeta and injects the Open Graph tags (`og:title`, `og:description`, `og:image`) into the page for crawlers. Normal visitors get the regular app.
@@ -98,6 +98,6 @@ OpenStream does not host, store or distribute any media. It only displays metada
 
 <div align="center">
 
-Made with ❤️ by [Shreyansh](https://github.com/Shreyansh-1255)
+Made with ❤️ by [Malik](https://github.com/Shreyansh-1255)
 
 </div>
