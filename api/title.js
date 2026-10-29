@@ -28,11 +28,15 @@ module.exports = async (req, res) => {
         const host = req.headers['x-forwarded-host'] || req.headers.host;
         const url = `https://${host}/t/${type}/${encodeURIComponent(id)}`;
         const title = m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name;
-        const desc = m.description || 'Watch on OpenStream';
+        // line 1: "Series · Horror, Thriller · IMDB: 8.2"   line 2+: the plot
+        const genres = (Array.isArray(m.genres) && m.genres.length ? m.genres : (Array.isArray(m.genre) ? m.genre : [])).slice(0, 3).join(', ');
+        const rating = m.imdbRating ? `IMDB: ${m.imdbRating}` : '';
+        const info = [type === 'movie' ? 'Movie' : 'Series', genres, rating].filter(Boolean).join(' · ');
+        const desc = m.description ? `${info}\n${m.description}` : info;
         const img = m.background || m.poster || '';
         const tags = [
           `<meta property="og:type" content="${type === 'movie' ? 'video.movie' : 'video.tv_show'}">`,
-          `<meta property="og:site_name" content="OpenStream (${type === 'movie' ? 'Movie' : 'Series'})">`,
+          `<meta property="og:site_name" content="OpenStream">`,
           `<meta property="og:url" content="${esc(url)}">`,
           `<meta property="og:title" content="${esc(title)}">`,
           `<meta property="og:description" content="${esc(desc)}">`,
