@@ -4,11 +4,11 @@
 
 **A fast, lightweight, backend-free movie & series browser powered by Cinemeta and Stremio addons.**
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-OpenStream-cda24e?style=for-the-badge&logo=vercel&logoColor=white)](https://YOUR-PROJECT.vercel.app)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-OpenStream-cda24e?style=for-the-badge&logo=vercel&logoColor=white)](https://openstream-tv.vercel.app/)
 [![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com)
 [![No Backend](https://img.shields.io/badge/Backend-None-2ea44f?style=for-the-badge)](#-how-it-works)
 
-### 🔗 [YOUR-PROJECT.vercel.app](https://YOUR-PROJECT.vercel.app)
+### 🔗 [OpenStream-tv.vercel.app/](https://openstream-tv.vercel.app/)
 
 </div>
 
