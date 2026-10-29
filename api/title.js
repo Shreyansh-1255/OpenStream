@@ -29,11 +29,7 @@ module.exports = async (req, res) => {
         const url = `https://${host}/t/${type}/${encodeURIComponent(id)}`;
         const kind = type === 'movie' ? 'Movie' : 'Series';
         const title = (m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name) + ` - ${kind}`;
-        // line 1: "Series · Horror, Thriller · IMDB: 8.2"   line 2+: the plot
-        const genres = (Array.isArray(m.genres) && m.genres.length ? m.genres : (Array.isArray(m.genre) ? m.genre : [])).slice(0, 3).join(', ');
-        const rating = m.imdbRating ? `IMDB: ${m.imdbRating}` : '';
-        const info = [type === 'movie' ? 'Movie' : 'Series', genres, rating].filter(Boolean).join(' · ');
-        const desc = m.description ? `${info}\n${m.description}` : info;
+        const desc = m.description || 'Watch on OpenStream';
         const img = m.background || m.poster || '';
         const tags = [
           `<meta property="og:type" content="${type === 'movie' ? 'video.movie' : 'video.tv_show'}">`,
