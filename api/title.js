@@ -27,7 +27,8 @@ module.exports = async (req, res) => {
       if (m && m.name) {
         const host = req.headers['x-forwarded-host'] || req.headers.host;
         const url = `https://${host}/t/${type}/${encodeURIComponent(id)}`;
-        const title = m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name;
+        const kind = type === 'movie' ? 'Movie' : 'Series';
+        const title = (m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name) + ` - ${kind}`;
         // line 1: "Series · Horror, Thriller · IMDB: 8.2"   line 2+: the plot
         const genres = (Array.isArray(m.genres) && m.genres.length ? m.genres : (Array.isArray(m.genre) ? m.genre : [])).slice(0, 3).join(', ');
         const rating = m.imdbRating ? `IMDB: ${m.imdbRating}` : '';
@@ -48,7 +49,7 @@ module.exports = async (req, res) => {
           `<meta name="description" content="${esc(desc)}">`,
         ].filter(Boolean).join('\n');
         html = html.replace(/<!--og-default-->[\s\S]*?<!--\/og-default-->\n?/, '')
-                   .replace('<title>OpenStream</title>', `<title>${esc(title)} - OpenStream</title>`)
+                   .replace('<title>OpenStream</title>', `<title>${esc(m.name)} - OpenStream</title>`)
                    .replace('</head>', tags + '\n</head>');
       }
     } catch (_) { /* Cinemeta down: fall through to the plain app */ }
