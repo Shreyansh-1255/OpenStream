@@ -32,7 +32,7 @@ module.exports = async (req, res) => {
         const img = m.background || m.poster || '';
         const tags = [
           `<meta property="og:type" content="${type === 'movie' ? 'video.movie' : 'video.tv_show'}">`,
-          `<meta property="og:site_name" content="OpenStream">`,
+          `<meta property="og:site_name" content="OpenStream (${type === 'movie' ? 'Movie' : 'Series'})">`,
           `<meta property="og:url" content="${esc(url)}">`,
           `<meta property="og:title" content="${esc(title)}">`,
           `<meta property="og:description" content="${esc(desc)}">`,
@@ -43,7 +43,8 @@ module.exports = async (req, res) => {
           img && `<meta name="twitter:image" content="${esc(img)}">`,
           `<meta name="description" content="${esc(desc)}">`,
         ].filter(Boolean).join('\n');
-        html = html.replace('<title>OpenStream</title>', `<title>${esc(title)} - OpenStream</title>`)
+        html = html.replace(/<!--og-default-->[\s\S]*?<!--\/og-default-->\n?/, '')
+                   .replace('<title>OpenStream</title>', `<title>${esc(title)} - OpenStream</title>`)
                    .replace('</head>', tags + '\n</head>');
       }
     } catch (_) { /* Cinemeta down: fall through to the plain app */ }
