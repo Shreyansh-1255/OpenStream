@@ -36,8 +36,7 @@ module.exports = async (req, res) => {
       if (m && m.name) {
         const host = req.headers['x-forwarded-host'] || req.headers.host;
         const url = `https://${host}/t/${type}/${encodeURIComponent(id)}`;
-        const kind = type === 'movie' ? 'Movie' : 'Series';
-        const title = (m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name) + ` - ${kind}`;
+        const title = m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name;
         const desc = shorten(m.description) || 'Watch on OpenStream';
         const img = m.background || m.poster || '';
         const tags = [
