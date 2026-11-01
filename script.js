@@ -49,6 +49,8 @@ function addonSupports(a, type, id) {
   return okType && okId;
 }
 const isType = t => t === 'movie' || t === 'series';
+const segEnc = x => encodeURIComponent(x).replace(/%3A/gi, ':'); // keeps ids like tt123:1:2 readable in an address
+const segDec = x => { try { return decodeURIComponent(x); } catch (_) { return x; } };
 document.getElementById('brandBtn').addEventListener('click', () => location.reload());
 let navDepth = 0; // how many in-app pages deep we are (0 = first page of this session)
 function goBack() {
@@ -56,21 +58,14 @@ function goBack() {
   if (location.pathname !== '/') { try { history.replaceState({ d: 0 }, '', '/'); } catch (_) {} onNav(); }
   else location.hash = '';
 }
+const titleNames = new Map(); // id -> title name, so the streams page can show it at once
 function goStreams(type, id, name) {
-  location.hash = `streams?type=${type}&id=${encodeURIComponent(id)}&n=${encodeURIComponent(name || '')}`;
+  if (name) titleNames.set(id, name);
+  location.hash = `/streams/${type}/${segEnc(id)}`;
 }
 let streamsToken = 0;
-const Q_TABS = ['all', '4K', '1080p', '720p', '480p'];
-let qFilter = 'all';
-try { qFilter = sessionStorage.getItem('openstream_qfilter') || 'all'; } catch (_) {}
-// which tab a quality belongs to; the 480p tab also holds lower resolutions, unknown quality shows only under "All"
-function qBucket(q) {
-  if (q === '4K') return '4K';
-  if (q === '1080p' || q === '1440p') return '1080p';
-  if (q === '720p') return '720p';
-  if (q === '576p' || q === '480p' || q === '360p') return '480p';
-  return '';
-}
+let addonFilter = ''; // '' = All addons; otherwise the addon's name (remembered for this browser tab)
+try { addonFilter = sessionStorage.getItem('openstream_afilter') || ''; } catch (_) {}
 async function fetchAddonStreams(a, type, id) {
   const r = await fetch(addonEndpoint(a, `/stream/${type}/${encodeURIComponent(id)}.json`), { cache: 'no-store', signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -84,13 +79,21 @@ async function initStreamsView(type, id, name) {
     return;
   }
   const token = ++streamsToken;
+  name = name || titleNames.get(id) || '';
   const se = type === 'series' ? id.split(':') : null;
   box.innerHTML = `<div class="s-head">${esc(name || id)}</div>
     <div class="s-sub">${se ? `Season ${esc(se[1])} · Episode ${esc(se[2])}` : 'Movie'}</div>
-    <div class="tabs qtabs" id="qTabs" style="display:none"></div>
+    <div class="tabs qtabs" id="aTabs" style="display:none"></div>
     <div id="sList"><div class="state-msg">Loading streams...</div></div>`;
+  if (!name) { // opened from a pasted / saved address: look the title name up
+    const baseId = type === 'series' ? (id.split(':').slice(0, -2).join(':') || id) : id;
+    getMeta(type, baseId).then(d => {
+      const h = box.querySelector('.s-head');
+      if (token === streamsToken && h && d && d.meta && d.meta.name) h.textContent = d.meta.name;
+    }).catch(() => {});
+  }
   const list = document.getElementById('sList');
-  const qTabsEl = document.getElementById('qTabs');
+  const aTabsEl = document.getElementById('aTabs');
   if (!ADDONS.length) {
     list.innerHTML = '<div class="state-msg">No stream addon added yet.<br><br><button class="s-set-btn" onclick="openSettings()">Add an addon</button></div>';
     return;
@@ -126,14 +129,22 @@ async function initStreamsView(type, id, name) {
     if (k) byKey.set(k, s);
   });
   const total = groups.length + tors.length;
+  const names = [...new Set(active.map(a => a.name))]; // one tab per addon
   const paint = () => {
-    const counts = { all: total, '4K': 0, '1080p': 0, '720p': 0, '480p': 0 };
-    groups.concat(tors).forEach(s => { const b = qBucket(qualityOf(s)); if (b) counts[b]++; });
-    const sel = (qFilter === 'all' || counts[qFilter] > 0) ? qFilter : 'all'; // chosen quality missing for this title: show everything
-    qTabsEl.innerHTML = Q_TABS.map(q => `<button type="button" data-q="${q}" class="${q === sel ? 'on' : ''}"${q !== 'all' && !counts[q] ? ' disabled' : ''}>${q === 'all' ? 'All' : q}</button>`).join('');
-    qTabsEl.style.display = total ? '' : 'none';
-    const match = s => sel === 'all' || qBucket(qualityOf(s)) === sel;
-    const g = groups.filter(match), t = tors.filter(match);
+    // how many cards each addon has for this title
+    const counts = {};
+    names.forEach(n => { counts[n] = 0; });
+    groups.forEach(g => new Set(g._members.map(m => m._addon)).forEach(n => { if (n in counts) counts[n]++; }));
+    tors.forEach(x => { if (x._addon in counts) counts[x._addon]++; });
+    const sel = (addonFilter && counts[addonFilter] > 0) ? addonFilter : ''; // chosen addon has nothing for this title: show everything
+    aTabsEl.innerHTML = [''].concat(names).map(n => `<button type="button" data-a="${esc(n)}" class="${n === sel ? 'on' : ''}"${n && !counts[n] ? ' disabled' : ''}>${n ? esc(n) : 'All'}</button>`).join('');
+    aTabsEl.style.display = total && names.length > 1 ? '' : 'none';
+    // with an addon selected, each card keeps only that addon's download buttons
+    const g = !sel ? groups : groups.map(s => {
+      const ms = s._members.filter(m => m._addon === sel);
+      return ms.length ? { ...ms[0], _members: ms } : null;
+    }).filter(Boolean);
+    const t = !sel ? tors : tors.filter(x => x._addon === sel);
     cardItems = g.concat(t);
     let html = g.map((s, n) => streamCard(s, n)).join('');
     if (!total) {
@@ -142,19 +153,19 @@ async function initStreamsView(type, id, name) {
         : hiddenTorrents ? 'No direct streams found.' : 'No streams found.';
       html = `<div class="state-msg">${msg}</div>`;
     } else if (!g.length) {
-      html = '<div class="s-note">No direct streams' + (sel === 'all' ? '' : ' in ' + sel) + '.</div>';
+      html = '<div class="s-note">No direct streams' + (sel ? ' from ' + esc(sel) : '') + '.</div>';
     }
-    if (t.length) html += `<div class="s-sec">Torrent links <span>${t.length}</span></div>` + t.map((s, n) => torrentCard(s, g.length + n)).join('');
-    if (hiddenTorrents) html += `<div class="s-note">${hiddenTorrents} torrent link${hiddenTorrents > 1 ? 's' : ''} hidden. <a href="#" onclick="openSettings();return false;" style="color:var(--gold);text-decoration:underline;">Enable in Settings</a></div>`;
+    if (t.length) html += `<div class="s-sec">Magnet links <span>${t.length}</span></div>` + t.map((s, n) => torrentCard(s, g.length + n)).join('');
+    if (hiddenTorrents) html += `<div class="s-note">${hiddenTorrents} magnet link${hiddenTorrents > 1 ? 's' : ''} hidden. <a href="#" onclick="openSettings();return false;" style="color:var(--gold);text-decoration:underline;">Enable in Settings</a></div>`;
     if (skipped) html += `<div class="s-note">${skipped} stream${skipped > 1 ? 's' : ''} skipped (unsupported format).</div>`;
     if (failed.length && failed.length < active.length) html += `<div class="s-note err">Could not load from: ${esc(failed.join(', '))}</div>`;
     list.innerHTML = html;
   };
-  qTabsEl.addEventListener('click', e => {
-    const b = e.target.closest('button[data-q]');
+  aTabsEl.addEventListener('click', e => {
+    const b = e.target.closest('button[data-a]');
     if (!b || b.disabled) return;
-    qFilter = b.dataset.q;
-    try { sessionStorage.setItem('openstream_qfilter', qFilter); } catch (_) {}
+    addonFilter = b.dataset.a;
+    try { sessionStorage.setItem('openstream_afilter', addonFilter); } catch (_) {}
     paint();
   });
   paint();
@@ -385,7 +396,7 @@ function openInfo(st) {
   });
   const size = sizeOf(st);
   if (size) rows.push(['File size', size, '']);
-  if (st._tor) { const sd = torrentSeeds(st); if (sd) rows.push(['Seeders', String(sd), 'Number of people sharing this torrent right now.']); }
+  if (st._tor) { const sd = torrentSeeds(st); if (sd) rows.push(['Seeders', String(sd), 'Number of people sharing this magnet right now.']); }
   const m = st._tor ? Infinity : Math.min(...members.map(x => leftMs(x.url)));
   if (isFinite(m)) rows.push(['Link expires', 'in ' + Math.max(1, Math.round(m / 60000)) + ' min', 'This link is time-limited. Reload the page for a fresh one.']);
   if (st._addon && sv.label !== st._addon) rows.push(['Addon', String(st._addon), '']);
@@ -516,12 +527,12 @@ function torrentCard(st, n) {
   const text = st.description || st.title || '';
   const src = ((text.match(/\u2699\uFE0F?\s*([^\n]+)/) || [])[1] || '').trim();
   st._tor = true;
-  st._src = src || 'Torrent';
+  st._src = src || 'Magnet';
   return `<div class="s-card tor">
     <button class="ib" type="button" data-n="${n}" aria-label="Show details">${INFO_IC}</button>
     ${releaseChips(st, false)}
     <div class="s-file">${esc(shownName(st))}</div>
-    <div class="srv-list">${serverRow(`<div class="s-btns"><a class="dl" href="#" data-url="${esc(magnetFor(st))}" onclick="copyLink(this);return false;">${ICONS.copy} Copy torrent link</a></div>`)}</div>
+    <div class="srv-list">${serverRow(`<div class="s-btns"><a class="dl" href="#" data-url="${esc(magnetFor(st))}" onclick="copyLink(this);return false;">${ICONS.copy} Copy magnet link</a></div>`)}</div>
   </div>`;
 }
 // Signed (S3/R2) links: work out the remaining time from X-Amz-Date + X-Amz-Expires
@@ -652,17 +663,6 @@ function matchScore(name, query) {
   return sim >= 0.7 ? Math.round(sim * 45) : 0;
 }
 
-// Abort signal that also times out (AbortSignal.any with a fallback for older browsers)
-function withTimeout(signal, ms) {
-  const t = AbortSignal.timeout(ms);
-  if (!signal) return t;
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any([signal, t]);
-  const c = new AbortController();
-  const stop = () => c.abort();
-  signal.addEventListener('abort', stop, { once: true });
-  t.addEventListener('abort', stop, { once: true });
-  return c.signal;
-}
 function cacheSet(map, key, val, max) {
   map.set(key, val);
   if (map.size > max) map.delete(map.keys().next().value);
@@ -697,32 +697,12 @@ async function cinemetaSearch(query, signal) {
   if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
   return r;
 }
-// Spelling help: IMDb's public suggestion service returns corrected titles / people. Optional; ignored if unreachable.
-const imdbCache = new Map();
-async function imdbSuggest(q, signal) {
-  if (imdbCache.has(q)) return imdbCache.get(q);
-  try {
-    const c = /^[a-z0-9]/.test(q) ? q[0] : 'x';
-    const r = await fetch(`https://v3.sg.media-imdb.com/suggestion/${c}/${encodeURIComponent(q)}.json`, { signal: withTimeout(signal, 2500) });
-    if (!r.ok) return [];
-    const d = await r.json();
-    const names = (d.d || []).map(x => x && x.l).filter(n => typeof n === 'string' && n);
-    cacheSet(imdbCache, q, names, 60);
-    return names;
-  } catch { return []; }
-}
-function fuzzyAlternatives(nq, names) {
-  if (names.length && normalizeText(names[0]) === nq) return []; // already an exact title / person name
+// Typo help (Cinemeta only): when a search finds little, also search slightly shorter versions of the query
+function fuzzyAlternatives(nq) {
   const alts = [];
-  names.slice(0, 4).forEach(n => {
-    const nn = normalizeText(n);
-    if (nn && nn !== nq && !alts.some(a => normalizeText(a) === nn)) alts.push(n);
-  });
-  if (!alts.length) { // fallback: loosen the query ourselves
-    if (nq.length >= 5) alts.push(nq.slice(0, -1));
-    const w = nq.split(' ').filter(x => x.length >= 4).sort((a, b) => b.length - a.length)[0];
-    if (nq.includes(' ') && w) alts.push(w);
-  }
+  if (nq.length >= 5) alts.push(nq.slice(0, -1));
+  const w = nq.split(' ').filter(x => x.length >= 4).sort((a, b) => b.length - a.length)[0];
+  if (nq.includes(' ') && w) alts.push(w);
   return alts.slice(0, 2);
 }
 
@@ -743,29 +723,20 @@ function rankItems(items, query) {
     .map(({ m }) => { const { _src, _alt, ...rest } = m; return rest; });
 }
 
-// Fast path: Cinemeta results are shown the moment they arrive (onPartial). Spelling help runs in parallel
-// and its extra results are merged in afterwards - it never blocks the first results.
+// Cinemeta results are shown the moment they arrive (onPartial); if the query looks misspelled,
+// slightly shorter versions of it are searched on Cinemeta too and merged in afterwards.
 async function searchTitles(query, onPartial, signal) {
   const nq = normalizeText(query);
-  const sugCtl = new AbortController();
-  if (signal) signal.addEventListener('abort', () => sugCtl.abort(), { once: true });
-  const sugP = nq.length < 3 ? Promise.resolve([])
-    : localEngine ? Promise.resolve(localEngine.search(query, 6).map(r => r.doc.name)) // local index already tolerates typos
-    : imdbSuggest(nq, sugCtl.signal);
-
-  let first;
-  try { first = await cinemetaSearch(query, signal); } catch (e) { sugCtl.abort(); throw e; }
-  if (first.failed) { sugCtl.abort(); throw new Error('search failed'); }
+  const first = await cinemetaSearch(query, signal);
+  if (first.failed) throw new Error('search failed');
   let items = dedupeItems(first.items.map(m => ({ ...m, _src: 0 })));
   const best = items.reduce((b, m) => Math.max(b, matchScore(m.name, query)), 0);
   // Few or no close title matches: the query may be misspelled, so try corrected versions too.
   const needFuzzy = nq.length >= 3 && (items.length < 3 || best < 60);
-  if (!needFuzzy) { sugCtl.abort(); return rankItems(items, query); }
+  if (!needFuzzy) return rankItems(items, query);
 
   if (items.length && onPartial) onPartial(rankItems(items, query)); // show what we have right now
-  const names = await sugP;
-  if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  const alts = fuzzyAlternatives(nq, names);
+  const alts = fuzzyAlternatives(nq);
   if (!alts.length) return rankItems(items, query);
   const extra = await Promise.all(alts.map(a => cinemetaSearch(a, signal).catch(e => {
     if (signal && signal.aborted) throw e;
@@ -787,6 +758,8 @@ const ICONS = {
   bookmarkOutline: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`,
   bookmark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`,
   star: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>`,
+  calendar: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`,
+  imdb: `<svg class="imdb" viewBox="0 0 32 16" role="img" aria-label="IMDb"><rect width="32" height="16" rx="3" fill="#f5c518"/><text x="16" y="12.2" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="900" font-size="11.5" letter-spacing="-.2" fill="#000">IMDb</text></svg>`,
   clock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>`,
   play: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>`,
   globe: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.500 5.700 12 3z"/></svg>`,
@@ -842,7 +815,12 @@ searchHistEl.addEventListener('click', e => {
   if (del) { list.splice(+del.dataset.i, 1); saveHist(list); renderSearch(); return; }
   const it = e.target.closest('.sh-item');
   if (it && list[+it.dataset.i] != null) {
-    submitSearch(list[+it.dataset.i]);
+    const q = list[+it.dataset.i];
+    qInput.value = q;
+    addHist(q);
+    searchHistEl.innerHTML = '';
+    clearTimeout(debounceTimer);
+    runSearch(q);
   }
 });
 
@@ -859,17 +837,19 @@ function setStateEl(el, msg, isError) {
   }
 }
 
-/* ---- search box: shows name-only suggestions from the local index; Enter opens the results page ---- */
-const ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>';
-function openSearch(prefill) {
+/* ---- search box: results appear right here (Cinemeta only); recent searches show while the box is empty ---- */
+let searchResults = [];
+let debounceTimer = null, searchCtl = null, searchSeq = 0;
+function openSearch() {
   searchOverlay.classList.add('open');
   document.body.classList.add('lock');
-  qInput.value = prefill || '';
-  renderSearch();
   qInput.focus();
-  if (prefill) qInput.select();
+  renderSearch();
 }
 openSearchBtn.addEventListener('click', () => openSearch());
+
+/* ---- app-like feel: no pinch or double-tap zoom (the page also sets touch-action and the viewport tag) ---- */
+['gesturestart', 'gesturechange', 'gestureend'].forEach(ev => document.addEventListener(ev, e => e.preventDefault())); // Safari
 
 /* ---- theme: dark <-> light (choice is remembered; the <head> script applies it before first paint) ---- */
 function applyTheme(light, save) {
@@ -891,41 +871,59 @@ function applyTheme(light, save) {
   document.getElementById('themeBtn').addEventListener('click', () => applyTheme(document.documentElement.getAttribute('data-theme') !== 'light', true));
 })();
 closeSearchBtn.addEventListener('click', closeSearch);
+// stop any pending / running search and forget its results
+function cancelSearch() {
+  clearTimeout(debounceTimer);
+  if (searchCtl) { searchCtl.abort(); searchCtl = null; }
+  searchSeq++;
+  searchResults = [];
+  searchListEl.innerHTML = '';
+}
 function closeSearch() {
   searchOverlay.classList.remove('open');
   document.body.classList.remove('lock');
-  // start fresh next time: forget the old query
+  // start fresh next time: forget the old query and results
+  cancelSearch();
   qInput.value = '';
-  searchListEl.innerHTML = '';
   setStateEl(searchStateEl, 'Type to search.');
 }
-let prefetchT = null;
-qInput.addEventListener('input', () => {
-  renderSearch(); // local index: instant, no network, so no debounce needed
-  // start the server search as soon as typing pauses, so the results are usually already there when Enter is pressed
-  clearTimeout(prefetchT);
-  const q = qInput.value.trim();
-  if (q.length < 2) return;
-  prefetchT = setTimeout(() => {
-    cinemetaSearch(q).catch(() => {});
-    const top = suggestionsFor(q)[0]; // most people tap the first suggestion
-    if (top && top.toLowerCase() !== q.toLowerCase()) cinemetaSearch(top).catch(() => {});
-  }, 250);
+qInput.addEventListener('input', (e) => {
+  clearTimeout(debounceTimer);
+  const value = e.target.value;
+  if (!value.trim()) { cancelSearch(); renderSearch(); return; }
+  searchHistEl.innerHTML = '';
+  if (!searchListEl.querySelector('.list-row:not(.sk)')) showSearching(); // never show an empty bar
+  const link = parseTitleLink(value);
+  debounceTimer = setTimeout(() => runSearch(value), link && link.url ? 120 : 400);
 });
-document.getElementById('searchForm').addEventListener('submit', (e) => { e.preventDefault(); submitSearch(qInput.value); });
-searchListEl.addEventListener('click', (e) => { const b = e.target.closest('.sug-row'); if (b) submitSearch(b.dataset.q); });
-function submitSearch(q) {
-  q = (q || '').trim();
-  if (!q) return;
-  addHist(q);
-  closeSearch();
-  const h = 'search?q=' + encodeURIComponent(q);
-  if (location.hash.slice(1) === h) return;
-  if (location.hash.startsWith('#search')) { // searching again from the results page replaces it instead of stacking history
-    router.replacing = true;
-    setTimeout(() => { router.replacing = false; }, 400);
-    location.replace('#' + h);
-  } else location.hash = h;
+document.getElementById('searchForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const v = qInput.value.trim();
+  if (!v) return;
+  clearTimeout(debounceTimer);
+  if (!parseTitleLink(v)) addHist(v); // pasted links are not kept in the history
+  runSearch(qInput.value);
+});
+
+// Search Cinemeta; rows appear as soon as the first answer arrives, and grey placeholder rows show while more may still come
+function runSearch(query) {
+  clearTimeout(debounceTimer);
+  if (searchCtl) searchCtl.abort();
+  const ctl = searchCtl = new AbortController();
+  const seq = ++searchSeq;
+  const stale = () => ctl.signal.aborted || seq !== searchSeq || qInput.value !== query;
+  searchResults = [];
+  searchHistEl.innerHTML = '';
+  const link = parseTitleLink(query);
+  if (link) { openFromLink(link, stale); return; }
+  renderSearch(true);
+  searchTitles(query, (partial) => { if (stale()) return; searchResults = partial; renderSearch(true); }, ctl.signal)
+    .then((res) => { if (stale()) return; searchResults = res; renderSearch(false); })
+    .catch((err) => {
+      if (stale() || (err && err.name === 'AbortError')) return;
+      searchListEl.innerHTML = '';
+      setStateEl(searchStateEl, 'Search failed. Check your connection and try again.', true);
+    });
 }
 
 function loadSaved() {
@@ -952,24 +950,78 @@ function renderWatchlist() {
   items.forEach(item => listEl.appendChild(renderRow(item, savedKeys, true)));
 }
 
-function renderSearch() {
-  const q = qInput.value.trim();
-  if (!q) { // nothing typed: show recent searches
+function normalizeSearch(m) {
+  return { id: m.imdb_id || m.id, type: m.mediaType, name: m.name, poster: m.poster, year: m.releaseInfo, rating: m.imdbRating };
+}
+const SK_ROW = '<div class="list-row sk" aria-hidden="true"><div class="list-thumb"></div><div class="list-info"><div class="sk-t"></div><div class="sk-m"></div></div></div>';
+// IMDb / Stremio links (or a bare tt id) pasted into the search box open that title directly
+function parseTitleLink(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  const um = t.match(/(?:https?:\/\/|www\.)\S+/i); // also works for "Title: https://..." share text
+  const isUrl = !!um || /^[\w-]+(\.[\w-]+)+\/\S*$/i.test(t);
+  const bare = /^tt\d{7,10}$/i.test(t);
+  if (!isUrl && !bare) return null;
+  const target = um ? um[0] : t;
+  const imdb = /(^|[/.])imdb\.com(\/|$)/i.test(target);
+  const tm = target.match(/\/title\/(tt\d{7,10})/i);
+  let id = tm ? tm[1] : '';
+  if (!id && !imdb) { const g = target.match(/\btt\d{7,10}\b/i); if (g) id = g[0]; }
+  if (id) {
+    const h = target.match(/\/(movie|series)\//i);
+    return { kind: 'title', id: id.toLowerCase(), hint: h ? h[1].toLowerCase() : '', url: isUrl };
+  }
+  return imdb ? { kind: 'other' } : null; // an IMDb link of a person / company / list
+}
+async function openFromLink(link, stale) {
+  if (link.kind === 'other') {
+    searchListEl.innerHTML = '';
+    setStateEl(searchStateEl, 'This is not a movie or series link. Paste a title link that has an ID like tt1375666.', true);
+    return;
+  }
+  setStateEl(searchStateEl, 'Opening title...');
+  searchStateEl.classList.add('compact');
+  searchListEl.innerHTML = SK_ROW;
+  const order = link.hint ? [link.hint, link.hint === 'movie' ? 'series' : 'movie'] : ['movie', 'series'];
+  const res = await Promise.allSettled(order.map(t => getMeta(t, link.id)));
+  if (stale()) return;
+  const hit = res.findIndex(r => r.status === 'fulfilled' && r.value && r.value.meta && r.value.meta.name);
+  if (hit >= 0) {
+    closeSearch();
+    location.hash = `/title/${order[hit]}/${segEnc(link.id)}`;
+    return;
+  }
+  searchListEl.innerHTML = '';
+  const offline = res.every(r => r.status === 'rejected' && !/^HTTP /.test(String(r.reason && r.reason.message)));
+  setStateEl(searchStateEl, offline ? 'Could not load. Check your connection and try again.' : 'No movie or series found for this link.', true);
+}
+// text + placeholder rows instead of an empty box while the search starts
+function showSearching() {
+  setStateEl(searchStateEl, 'Searching...');
+  searchStateEl.classList.add('compact');
+  searchListEl.innerHTML = SK_ROW.repeat(3);
+}
+function renderSearch(loading) { // loading = a search is still running
+  if (!qInput.value.trim()) { // nothing typed: show recent searches
     searchListEl.innerHTML = '';
     if (renderHistory()) { setStateEl(searchStateEl, null); return; }
     setStateEl(searchStateEl, 'Type to search.');
     return;
   }
   searchHistEl.innerHTML = '';
-  const names = suggestionsFor(q);
-  if (!names.length) {
+  const types = activeTypes();
+  const items = searchResults.map(normalizeSearch).filter(i => types.includes(i.type));
+
+  if (!items.length) {
+    if (loading) { showSearching(); return; }
+    setStateEl(searchStateEl, !types.length ? 'Select at least one filter.' : searchResults.length ? 'No results for the selected filters.' : 'No results found.');
     searchListEl.innerHTML = '';
-    setStateEl(searchStateEl, localEngine ? 'No suggestions. Press Enter to search.' : 'Press Enter to search.');
     return;
   }
   setStateEl(searchStateEl, null);
-  searchListEl.innerHTML = '<div class="sh-head"><span>Search suggestions</span></div>' +
-    names.map(n => `<button type="button" class="sug-row" data-q="${esc(n)}">${ICON_SEARCH}<span>${esc(n)}</span></button>`).join('');
+  searchListEl.innerHTML = '';
+  items.forEach(item => searchListEl.appendChild(renderRow(item, new Set(), false)));
+  if (loading) searchListEl.insertAdjacentHTML('beforeend', SK_ROW.repeat(2));
 }
 
 const NO_POSTER = '<div class="no-poster" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/><path d="M4 4l16 16"/></svg><span>No poster</span></div>';
@@ -982,10 +1034,10 @@ function renderRow(item, savedKeys, showSaveBtn) {
   const typeLabel = item.type === 'series' ? 'Series' : 'Movie';
 
   row.innerHTML = `
-    <a class="list-thumb" href="#title?type=${item.type}&id=${encodeURIComponent(item.id)}">
+    <a class="list-thumb" href="#/title/${item.type}/${segEnc(item.id)}">
       ${item.poster ? `<img src="${esc(item.poster)}" alt="" loading="lazy">` : NO_POSTER}
     </a>
-    <a class="list-info" href="#title?type=${item.type}&id=${encodeURIComponent(item.id)}">
+    <a class="list-info" href="#/title/${item.type}/${segEnc(item.id)}">
       <div class="list-title">${esc(item.name || 'Untitled')}</div>
       <div class="list-meta">
         <span>${typeLabel}</span>
@@ -1025,17 +1077,25 @@ const paneDiscover = document.getElementById('pane-discover');
 const paneWatch = document.getElementById('pane-watch');
 const tabsEl = document.getElementById('tabs');
 let homeTab = 'discover';
-try { if (sessionStorage.getItem('openstream_tab') === 'watchlist') homeTab = 'watchlist'; } catch (_) {}
 
 function setTab(tab) {
   homeTab = tab;
-  try { sessionStorage.setItem('openstream_tab', tab); } catch (_) {}
   tabsEl.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   paneDiscover.style.display = tab === 'discover' ? '' : 'none';
   paneWatch.style.display = tab === 'watchlist' ? '' : 'none';
   if (tab === 'discover') loadDiscover();
 }
-tabsEl.addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) setTab(b.dataset.tab); });
+// the address follows the tab (replaces the entry, so Back still leaves the home page in one step)
+function setTabUrl(tab) {
+  const want = tab === 'watchlist' ? '/watchlist' : '/';
+  try {
+    if (location.pathname + location.hash !== want) {
+      history.replaceState(history.state, '', want);
+      onNav.k = location.pathname + location.search + location.hash;
+    }
+  } catch (_) {}
+}
+tabsEl.addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { setTab(b.dataset.tab); setTabUrl(b.dataset.tab); } });
 
 const catCache = new Map();
 function cinemetaJson(path) {
@@ -1082,7 +1142,7 @@ function posterSrc(u) { return (HIRES && typeof u === 'string') ? u.replace('/po
 function posterCard(m, type) {
   const id = m.imdb_id || m.id;
   const src = m.poster ? posterSrc(m.poster) : '';
-  return `<a class="p-card" href="#title?type=${type}&id=${encodeURIComponent(id)}" data-type="${type}" data-id="${esc(id)}" data-name="${esc(m.name || '')}" data-year="${esc(m.releaseInfo || '')}" data-rating="${esc(m.imdbRating || '')}" data-poster="${esc(m.poster || '')}">
+  return `<a class="p-card" href="#/title/${type}/${segEnc(id)}" data-type="${type}" data-id="${esc(id)}" data-name="${esc(m.name || '')}" data-year="${esc(m.releaseInfo || '')}" data-rating="${esc(m.imdbRating || '')}" data-poster="${esc(m.poster || '')}">
     <div class="p-img">${src ? `<img src="${esc(src)}" data-fb="${esc(m.poster)}" alt="" loading="lazy">` : NO_POSTER}${m.imdbRating ? `<span class="p-rate">${esc(m.imdbRating)}</span>` : ''}</div>
     <div class="p-name">${esc(m.name || 'Untitled')}</div>
     <div class="p-year">${esc(m.releaseInfo || '')}</div>
@@ -1106,7 +1166,7 @@ async function loadDiscover() {
     const sec = document.createElement('section');
     sec.className = 'rail-sec';
     sec.dataset.type = c.type;
-    sec.innerHTML = `<div class="rail-head"><h2>${esc(c.name)} · ${c.type === 'movie' ? 'Movies' : 'Series'}</h2><div class="rail-actions"><span class="rail-nav"><button type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button><button type="button" data-dir="1" aria-label="Scroll right">&#8250;</button></span><a href="#catalog?type=${c.type}&id=${encodeURIComponent(c.id)}${c.genreRequired ? '&genre=' + encodeURIComponent(c.genres[0]) : ''}">See all</a></div></div><div class="rail"><div class="state-msg" style="padding:30px 0;width:100%;">Loading...</div></div>`;
+    sec.innerHTML = `<div class="rail-head"><h2>${esc(c.name)} · ${c.type === 'movie' ? 'Movies' : 'Series'}</h2><div class="rail-actions"><span class="rail-nav"><button type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button><button type="button" data-dir="1" aria-label="Scroll right">&#8250;</button></span><a href="#/catalog/${c.type}/${segEnc(c.id)}${c.genreRequired ? '/' + encodeURIComponent(c.genres[0]) : ''}">See all</a></div></div><div class="rail"><div class="state-msg" style="padding:30px 0;width:100%;">Loading...</div></div>`;
     railsEl.appendChild(sec);
     const rail = sec.querySelector('.rail');
     cinemetaJson(catalogPath(c.type, c.id, c.genreRequired ? c.genres[0] : '')).then(d => {
@@ -1178,7 +1238,7 @@ function showPop(card) {
       <div class="hp-genres"></div>
       <div class="hp-desc dim">Loading...</div>
       <div class="hp-actions">
-        <a class="hp-view" href="#title?type=${d.type}&id=${encodeURIComponent(d.id)}">View Details ${ARROW_SVG}</a>
+        <a class="hp-view" href="#/title/${d.type}/${segEnc(d.id)}">View Details ${ARROW_SVG}</a>
         <button type="button" class="hp-save ${saved ? 'saved' : ''}" aria-label="${saved ? 'Remove from watchlist' : 'Add to watchlist'}">${saved ? ICONS.check : PLUS_SVG}</button>
       </div>
     </div>`;
@@ -1385,7 +1445,7 @@ document.getElementById('catalogContent').addEventListener('change', e => {
   else if (genre && !(cur && cur.genres.includes(genre))) genre = '';
   router.replacing = true; // switching filters must not add history entries
   setTimeout(() => { router.replacing = false; }, 400); // safety: never leave the flag stuck if the address did not change
-  location.replace(`#catalog?type=${type}&id=${encodeURIComponent(id)}${genre ? '&genre=' + encodeURIComponent(genre) : ''}`);
+  location.replace(`#/catalog/${type}/${segEnc(id)}${genre ? '/' + encodeURIComponent(genre) : ''}`);
 });
 document.getElementById('catalogContent').addEventListener('click', e => {
   if (e.target.closest('.retry-cat')) { e.preventDefault(); loadMoreCatalog(catState); }
@@ -1491,6 +1551,34 @@ function renderTitle(meta) {
   }
 }
 
+// Remember which season is open for each series, so coming back from a streams page shows the same season
+const seasonMemo = new Map();
+const SEASON_KEY = 'os_season_memo';
+function recallSeason(id) {
+  if (seasonMemo.has(id)) return seasonMemo.get(id);
+  try { const o = JSON.parse(sessionStorage.getItem(SEASON_KEY) || '{}'); if (o && o[id] != null) return Number(o[id]); } catch (_) {}
+  return null;
+}
+function rememberSeason(id, season) {
+  seasonMemo.set(id, Number(season));
+  if (seasonMemo.size > 40) seasonMemo.delete(seasonMemo.keys().next().value);
+  try { sessionStorage.setItem(SEASON_KEY, JSON.stringify(Object.fromEntries(seasonMemo))); } catch (_) {}
+}
+
+// "2026-10-16T00:00:00.000Z" -> "16 October 2026" (UTC, so the day never shifts with the time zone)
+function fmtEpDate(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+function epRating(ep) { const n = parseFloat(ep.rating ?? ep.imdbRating); return n > 0 ? n.toFixed(1) : ''; }
+
+function episodeMeta(ep) {
+  const d = fmtEpDate(ep.released || ep.firstAired), r = epRating(ep);
+  if (!d && !r) return '';
+  return `<div class="episode-meta">${d ? `<span class="ep-date">${ICONS.calendar}<span>${esc(d)}</span></span>` : ''}${r ? `<span class="ep-rate">${ICONS.imdb}<b>${esc(r)}</b></span>` : ''}</div>`;
+}
+
 function renderEpisodes(meta) {
   if (currentType !== 'series' || !Array.isArray(meta.videos) || !meta.videos.length) return '';
 
@@ -1505,6 +1593,8 @@ function renderEpisodes(meta) {
   if (!seasons.length) return '';
 
   const multi = seasons.length > 1;
+  const want = recallSeason(currentId);
+  const sel = seasons.includes(want) ? want : seasons[0]; // the season that was open before (else Season 1)
   const blocks = seasons.map((s, i) => {
     const eps = bySeason[s].sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
     const rows = eps.map(ep => `
@@ -1512,14 +1602,15 @@ function renderEpisodes(meta) {
         <div class="episode-num">${String(ep.episode ?? '').padStart(2, '0')}</div>
         <div class="episode-info">
           <div class="episode-title">${esc(ep.title || ep.name || ('Episode ' + ep.episode))}</div>
+          ${episodeMeta(ep)}
           ${ep.overview ? `<div class="episode-overview">${esc(ep.overview)}</div>` : ''}
         </div>
       </div>
     `).join('');
-    return `<div class="season-block${i === 0 ? '' : ' hidden'}" data-s="${s}">${multi ? '' : `<div class="season-title">Season ${s}</div>`}${rows}</div>`;
+    return `<div class="season-block${s === sel ? '' : ' hidden'}" data-s="${s}">${multi ? '' : `<div class="season-title">Season ${s}</div>`}${rows}</div>`;
   }).join('');
   const picker = multi
-    ? `<div class="season-picker" role="tablist" aria-label="Seasons">${seasons.map((s, i) => `<button type="button" role="tab" class="${i === 0 ? 'on' : ''}" aria-selected="${i === 0}" data-s="${s}" onclick="pickSeason(this)">Season ${s}</button>`).join('')}</div>`
+    ? `<div class="season-picker" role="tablist" aria-label="Seasons">${seasons.map((s, i) => `<button type="button" role="tab" class="${s === sel ? 'on' : ''}" aria-selected="${s === sel}" data-s="${s}" onclick="pickSeason(this)">Season ${s}</button>`).join('')}</div>`
     : '';
 
   const totalEpisodes = seasons.reduce((sum, s) => sum + bySeason[s].length, 0);
@@ -1532,6 +1623,7 @@ function pickSeason(btn) {
   const s = btn.dataset.s;
   document.querySelectorAll('.season-picker button').forEach(b => { const on = b === btn; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
   document.querySelectorAll('.season-block').forEach(b => b.classList.toggle('hidden', b.dataset.s !== s));
+  rememberSeason(currentId, s);
 }
 
 function toggleSaveTitle(meta) {
@@ -1550,249 +1642,39 @@ function toggleSaveTitle(meta) {
 /* ======================================================================
    Router (hash-based, replaces index.html / title.html navigation)
    ====================================================================== */
-/* ======================================================================
-   LOCAL TITLE INDEX (Cinemeta feed.json) - powers the name-only suggestions
-   ====================================================================== */
-class LocalSearch {
-  static tokenize(s) {
-    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-      .replace(/[^\p{L}\p{N}\p{M}]+/gu, ' ').trim().split(' ').filter(Boolean);
-  }
-  static lev(a, b, max) {
-    if (Math.abs(a.length - b.length) > max) return max + 1;
-    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-    for (let i = 1; i <= a.length; i++) {
-      const cur = [i]; let min = i;
-      for (let j = 1; j <= b.length; j++) {
-        const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-        cur[j] = v; if (v < min) min = v;
-      }
-      if (min > max) return max + 1;
-      prev = cur;
-    }
-    return prev[b.length];
-  }
-  constructor(docs) {
-    this.w = { rating: 0.5, pop: 0.5 };
-    this.docs = docs;
-    this.norm = new Array(docs.length);
-    this.nt = new Uint8Array(docs.length);
-    this.index = new Map();
-    let maxR = 0, maxP = 0;
-    docs.forEach((d, id) => {
-      const tk = LocalSearch.tokenize(d.name);
-      this.norm[id] = tk.join(' '); this.nt[id] = Math.min(tk.length, 255);
-      if (d.rating > maxR) maxR = d.rating;
-      if (d.pop > maxP) maxP = d.pop;
-      for (const t of new Set(tk)) { let a = this.index.get(t); if (!a) this.index.set(t, a = []); a.push(id); }
-    });
-    this.maxR = maxR || 10; this.maxP = maxP || 1;
-    this.vocab = Array.from(this.index.keys()).sort();
-    this.idf = new Map();
-    const N = docs.length;
-    for (const [t, a] of this.index) this.idf.set(t, Math.log(1 + N / a.length));
-  }
-  lower(t) { let lo = 0, hi = this.vocab.length; while (lo < hi) { const m = (lo + hi) >> 1; if (this.vocab[m] < t) lo = m + 1; else hi = m; } return lo; }
-  search(query, limit = 20) {
-    const qt = LocalSearch.tokenize(query);
-    if (!qt.length) return [];
-    const acc = new Map();
-    qt.forEach((t, i) => {
-      const terms = new Map();
-      if (this.index.has(t)) terms.set(t, 1);
-      if (i === qt.length - 1) { // autocomplete: the last word is a prefix
-        for (let j = this.lower(t); j < this.vocab.length; j++) {
-          const v = this.vocab[j]; if (!v.startsWith(t)) break;
-          if (!terms.has(v)) terms.set(v, 0.6 + 0.4 * t.length / v.length);
-        }
-      }
-      if (t.length >= 4 && terms.size < 3) { // typo tolerance (Levenshtein), only words with the same first letter
-        const max = t.length >= 8 ? 2 : 1;
-        for (let j = this.lower(t[0]); j < this.vocab.length; j++) {
-          const v = this.vocab[j]; if (v[0] !== t[0]) break;
-          if (terms.has(v)) continue;
-          const dist = LocalSearch.lev(t, v, max);
-          if (dist <= max) terms.set(v, 0.5 / dist);
-        }
-      }
-      const hit = new Map();
-      for (const [term, w] of terms) {
-        const sc = w * this.idf.get(term);
-        for (const id of this.index.get(term)) if (sc > (hit.get(id) || 0)) hit.set(id, sc);
-      }
-      for (const [id, sc] of hit) { const c = acc.get(id); if (c) { c.s += sc; c.n++; } else acc.set(id, { s: sc, n: 1 }); }
-    });
-    let rows = [...acc].filter(([, c]) => c.n === qt.length);
-    if (!rows.length) rows = [...acc]; // fallback: any word matches
-    const qn = qt.join(' ');
-    const out = rows.map(([id, c]) => {
-      const d = this.docs[id], n = this.norm[id];
-      let s = c.s * c.n;
-      s *= d.rating ? Math.exp(d.rating / this.maxR * this.w.rating) : 1; // IMDb rating boost
-      s *= d.pop ? Math.exp(d.pop / this.maxP * this.w.pop) : 1;          // popularity boost
-      if (n === qn) s *= 3; else if (n.startsWith(qn)) s *= 1.5;           // exact / prefix of the title
-      s /= 1 + 0.08 * Math.max(0, this.nt[id] - qt.length);                // prefer shorter titles
-      return { doc: d, score: s };
-    });
-    out.sort((a, b) => b.score - a.score);
-    return out.slice(0, limit);
-  }
-}
-
-const FEED_URL = 'https://cinemeta-catalogs.strem.io/feed.json';
-const FEED_TTL = 12 * 3600 * 1000; // re-download the feed at most twice a day
-let localEngine = null;
-let feedBusy = false;
-function idbKv(mode, key, val) {
-  return new Promise((res, rej) => {
-    const r = indexedDB.open('openstream_local', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('kv');
-    r.onerror = () => rej(r.error);
-    r.onsuccess = () => {
-      try {
-        const db = r.result;
-        const tx = db.transaction('kv', mode === 'get' ? 'readonly' : 'readwrite');
-        const st = tx.objectStore('kv');
-        const q = mode === 'get' ? st.get(key) : st.put(val, key);
-        q.onsuccess = () => res(q.result);
-        q.onerror = () => rej(q.error);
-        tx.oncomplete = () => db.close();
-      } catch (e) { rej(e); }
-    };
-  });
-}
-// Suggestions show names only, but the results page is drawn from the same index, so id / type / year / poster are kept too.
-function parseFeed(text) {
-  const j = JSON.parse(text);
-  const arr = Array.isArray(j) ? j : (j.metas || j.items || j.data || Object.values(j).find(Array.isArray) || []);
-  return arr.map(it => {
-    const r = parseFloat(it.imdbRating ?? it.imdb_rating ?? it.rating);
-    const p = Number(it.popularity ?? it.pop);
-    const poster = typeof it.poster === 'string' && /^https?:\/\//.test(it.poster) ? it.poster : '';
-    return { id: String(it.imdb_id ?? it.id ?? ''), name: String(it.name ?? it.title ?? ''), type: it.type === 'series' ? 'series' : (it.type === 'movie' ? 'movie' : ''),
-      year: String(it.releaseInfo ?? it.year ?? ''), rating: isFinite(r) ? r : 0, pop: isFinite(p) ? p : 0, poster };
-  }).filter(d => d.name);
-}
-function buildLocal(docs) {
-  localEngine = new LocalSearch(docs);
-  if (searchOverlay.classList.contains('open')) renderSearch(); // suggestions can start appearing right away
-}
-async function refreshFeed() {
-  if (feedBusy) return;
-  feedBusy = true;
-  try {
-    const res = await fetch(FEED_URL, { cache: 'no-cache' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const docs = parseFeed(await res.text());
-    if (!docs.length) throw new Error('empty feed');
-    try { await idbKv('set', 'docs2', { v: 2, docs, at: Date.now() }); } catch (_) {} // save before the index is built
-    buildLocal(docs);
-  } catch (_) { /* keep whatever copy we have; suggestions are optional */ }
-  feedBusy = false;
-}
-async function initLocalSearch() {
-  let at = 0;
-  try {
-    const c = await idbKv('get', 'docs2');
-    if (c && c.v === 2 && Array.isArray(c.docs) && c.docs.length) { buildLocal(c.docs); at = c.at || 0; } // saved copy: instant
-  } catch (_) {}
-  if (!localEngine || Date.now() - at > FEED_TTL) refreshFeed();
-}
-function suggestionsFor(q) {
-  if (!localEngine) return [];
-  const seen = new Set(), out = [];
-  for (const { doc } of localEngine.search(q, 40)) {
-    const k = doc.name.toLowerCase();
-    if (seen.has(k)) continue; // a movie and a series (or a remake) with the same name show once
-    seen.add(k); out.push(doc.name);
-    if (out.length >= 8) break;
-  }
-  return out;
-}
-
-// Instant results straight from the local index (no network); the server search fills in the rest afterwards.
-function localResultsFor(q) {
-  if (!localEngine) return [];
-  const out = [];
-  for (const { doc: d } of localEngine.search(q, 40)) {
-    if (!d.id || !d.type) continue;
-    out.push({ id: d.id, imdb_id: d.id, name: d.name, poster: d.poster, releaseInfo: d.year, imdbRating: d.rating ? d.rating.toFixed(1) : '', mediaType: d.type });
-    if (out.length >= 30) break;
-  }
-  return out;
-}
-function mergeResults(local, server) { // local rows stay where they are; only server-only titles are appended
-  const key = m => m.mediaType + ':' + (m.imdb_id || m.id);
-  const seen = new Set(local.map(key));
-  return local.concat(server.filter(m => !seen.has(key(m))));
-}
-
-/* ======================================================================
-   SEARCH RESULTS PAGE (#search?q=...) - Movies and Series in separate rows
-   ====================================================================== */
-const RAIL_NAV = '<span class="rail-nav"><button type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button><button type="button" data-dir="1" aria-label="Scroll right">&#8250;</button></span>';
-let srCtl = null, srToken = 0;
-const srSnaps = new Map();
-function saveSearchSnapshot() {
-  const box = document.getElementById('searchContent');
-  if (!box || box.dataset.done !== '1' || !box.dataset.q) return;
-  srSnaps.set(box.dataset.q, { html: box.innerHTML, y: window.scrollY });
-  if (srSnaps.size > 8) srSnaps.delete(srSnaps.keys().next().value);
-}
-const SK_CARD = '<div class="p-card sk" aria-hidden="true"><div class="p-img"></div><div class="p-name"></div><div class="p-year"></div></div>';
-function srSections(list, loading) { // loading = more results may still arrive: rails end with skeleton cards
-  return [['movie', 'Movies'], ['series', 'Series']].map(([t, label]) => {
-    const items = list.filter(m => m.mediaType === t);
-    if (!items.length) {
-      return loading ? `<section class="rail-sec sk-sec" data-type="${t}" aria-hidden="true"><div class="rail-head"><h2><span class="sk-line"></span></h2></div><div class="rail">${SK_CARD.repeat(6)}</div></section>` : '';
-    }
-    return `<section class="rail-sec" data-type="${t}"><div class="rail-head"><h2>${label}<span class="sr-count">${items.length}</span></h2><div class="rail-actions">${RAIL_NAV}</div></div><div class="rail">${items.map(m => posterCard(m, t)).join('')}${loading ? SK_CARD.repeat(4) : ''}</div></section>`;
-  }).join('');
-}
-function initSearchView(q) {
-  const box = document.getElementById('searchContent');
-  if (srCtl) { srCtl.abort(); srCtl = null; }
-  q = (q || '').trim();
-  box.dataset.q = q; box.dataset.done = '0';
-  const bar = `<button type="button" class="sr-bar" id="srBar" aria-label="Edit search">${ICON_SEARCH}<span>${esc(q || 'Search')}</span></button>`;
-  if (!q) { box.innerHTML = bar + '<div class="state-msg">Type something to search.</div>'; return; }
-  const snap = srSnaps.get(q);
-  if (snap) { // coming back (e.g. from a title page): restore the rows and scroll position
-    box.innerHTML = snap.html; box.dataset.done = '1';
-    requestAnimationFrame(() => window.scrollTo(0, snap.y));
-    return;
-  }
-  const token = ++srToken, ctl = srCtl = new AbortController();
-  const local = localResultsFor(q);
-  box.innerHTML = bar + '<div id="srBody" aria-busy="true">' + srSections([], true) + '</div>';
-  const stale = () => ctl.signal.aborted || token !== srToken;
-  const show = (list, final) => {
-    const body = document.getElementById('srBody');
-    if (!body || stale()) return;
-    body.setAttribute('aria-busy', final ? 'false' : 'true');
-    if (list.length) body.innerHTML = srSections(list, !final);
-    else if (final) body.innerHTML = `<div class="state-msg">No results for &ldquo;${esc(q)}&rdquo;.</div>`;
-    if (final) box.dataset.done = '1';
-  };
-  if (local.length) show(local, false); // on screen immediately
-  searchTitles(q, (partial) => show(mergeResults(local, partial), false), ctl.signal)
-    .then(list => show(mergeResults(local, list), true))
-    .catch(() => {
-      const body = document.getElementById('srBody');
-      if (!body || stale()) return;
-      if (local.length) { show(local, true); return; } // offline: the local results are still there (skeletons removed)
-      body.innerHTML = '<div class="state-msg error">Search failed. Check your connection. <a href="#" class="sr-retry" style="text-decoration:underline;">Retry</a></div>';
-    });
-}
-document.getElementById('searchContent').addEventListener('click', (e) => {
-  const box = e.currentTarget;
-  if (e.target.closest('#srBar')) { openSearch(box.dataset.q); return; }
-  const nb = e.target.closest('.rail-nav button');
-  if (nb) { const r = nb.closest('.rail-sec').querySelector('.rail'); r.scrollBy({ left: +nb.dataset.dir * r.clientWidth * 0.85, behavior: 'smooth' }); return; }
-  if (e.target.closest('.sr-retry')) { e.preventDefault(); srSnaps.delete(box.dataset.q); initSearchView(box.dataset.q); }
-});
-
 let homeScroll = 0;
+/* Addresses of the app
+     /                        home (Discover)          /watchlist                 home (Watchlist tab)
+     /t/<type>/<id>           title page               /c/<type>/<id>[/<genre>]   "See all" catalog
+     /#/streams/<type>/<id>   streams page
+   Old links (#title?type=..&id=.. and so on) still open and are rewritten to the short form. */
+function parseRoute() {
+  const h = location.hash.slice(1);
+  const p = location.pathname;
+  let m;
+  if (h.startsWith('/')) { // #/streams/movie/tt123
+    const [page, a, b, c] = h.split('?')[0].split('/').slice(1).map(segDec);
+    if ((page === 'streams' || page === 'title') && isType(a) && b) return { page, type: a, id: b };
+    if (page === 'catalog' && isType(a) && b) return { page, type: a, id: b, genre: c || '' };
+    if (page === 'watchlist') return { page };
+  } else if (h) { // old style: #title?type=movie&id=tt123
+    const page = h.split('?')[0];
+    const q = new URLSearchParams(h.split('?')[1] || '');
+    if (page === 'streams' || page === 'title' || page === 'catalog') return { page, type: q.get('type'), id: q.get('id'), genre: q.get('genre') || '', name: q.get('n') || '' };
+  } else { // clean address: /t/movie/tt123
+    if ((m = p.match(/^\/t\/(movie|series)\/([^/]+)\/?$/))) return { page: 'title', type: m[1], id: segDec(m[2]) };
+    if ((m = p.match(/^\/c\/(movie|series)\/([^/]+)(?:\/([^/]+))?\/?$/))) return { page: 'catalog', type: m[1], id: segDec(m[2]), genre: m[3] ? segDec(m[3]) : '' };
+    if (/^\/watchlist\/?$/.test(p)) return { page: 'watchlist' };
+  }
+  return { page: 'home' };
+}
+function canonFor(r) {
+  if (r.page === 'title' && isType(r.type) && r.id) return `/t/${r.type}/${segEnc(r.id)}`;
+  if (r.page === 'catalog' && isType(r.type) && r.id) return `/c/${r.type}/${segEnc(r.id)}` + (r.genre ? '/' + encodeURIComponent(r.genre) : '');
+  if (r.page === 'streams' && isType(r.type) && r.id) return `/#/streams/${r.type}/${segEnc(r.id)}`;
+  if (r.page === 'watchlist') return '/watchlist';
+  return null;
+}
 function router() {
   // track in-app depth: new entries have no state yet; back/forward restores the stored depth
   if (router.replacing) { // same page depth: this navigation replaced the current history entry
@@ -1803,42 +1685,33 @@ function router() {
   else { navDepth = router.last == null ? 0 : router.last + 1; try { history.replaceState({ d: navDepth }, ''); } catch (_) {} }
   router.last = navDepth;
   if (document.getElementById('view-catalog').style.display !== 'none') saveCatSnapshot();
-  if (document.getElementById('view-search').style.display !== 'none') saveSearchSnapshot();
-  if (!location.hash.slice(1).startsWith('catalog')) stopCatObserver();
+  const r = parseRoute();
+  if (r.page !== 'catalog') stopCatObserver();
   if (viewHome.style.display !== 'none') homeScroll = window.scrollY;
-  let hash = location.hash.slice(1);
-  const pm = location.pathname.match(/^\/t\/(movie|series)\/([^/]+)\/?$/);
-  if (!hash && pm) hash = `title?type=${pm[1]}&id=${pm[2]}`; // shared link: /t/movie/tt0120338
-  const params = new URLSearchParams(hash.split('?')[1] || '');
-  // address bar: title pages show a clean, shareable /t/<type>/<id> URL; every other page lives at /#...
+  // address bar: every page gets a short, clean address
   try {
-    let canon = null;
-    if (hash.startsWith('title') && isType(params.get('type')) && params.get('id')) canon = `/t/${params.get('type')}/${encodeURIComponent(params.get('id'))}`;
-    else if (location.pathname !== '/') canon = '/' + location.hash;
+    let canon = canonFor(r);
+    if (!canon && location.pathname !== '/') canon = '/' + location.hash;
     if (canon && location.pathname + location.hash !== canon) history.replaceState(history.state, '', canon);
   } catch (_) {}
-  const vs = document.getElementById('view-streams'), vc = document.getElementById('view-catalog'), vsr = document.getElementById('view-search');
-  viewHome.style.display = 'none'; viewTitle.style.display = 'none'; vs.style.display = 'none'; vc.style.display = 'none'; vsr.style.display = 'none';
-  if (hash.startsWith('streams')) {
+  const vs = document.getElementById('view-streams'), vc = document.getElementById('view-catalog');
+  viewHome.style.display = 'none'; viewTitle.style.display = 'none'; vs.style.display = 'none'; vc.style.display = 'none';
+  if (r.page === 'streams') {
     vs.style.display = '';
     window.scrollTo(0, 0);
-    initStreamsView(params.get('type'), params.get('id'), params.get('n'));
-  } else if (hash.startsWith('search')) {
-    vsr.style.display = '';
-    window.scrollTo(0, 0);
-    initSearchView(params.get('q'));
-  } else if (hash.startsWith('title')) {
+    initStreamsView(r.type, r.id, r.name);
+  } else if (r.page === 'title') {
     viewTitle.style.display = '';
     window.scrollTo(0, 0);
-    initTitleView(params.get('type'), params.get('id'));
-  } else if (hash.startsWith('catalog')) {
+    initTitleView(r.type, r.id);
+  } else if (r.page === 'catalog') {
     vc.style.display = '';
     window.scrollTo(0, 0);
-    initCatalogView(params.get('type'), params.get('id'), params.get('genre'));
+    initCatalogView(r.type, r.id, r.genre);
   } else {
     viewHome.style.display = '';
     loadSaved();
-    setTab(homeTab);
+    setTab(r.page === 'watchlist' ? 'watchlist' : 'discover');
     const y = homeScroll;
     requestAnimationFrame(() => window.scrollTo(0, y));
   }
@@ -1881,7 +1754,7 @@ function closeSettings() { setOverlay.classList.remove('open'); document.body.cl
 document.getElementById('addonClose').addEventListener('click', closeSettings);
 setOverlay.addEventListener('click', e => { if (e.target === setOverlay) closeSettings(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
-function refreshStreams() { if (location.hash.startsWith('#streams')) router(); }
+function refreshStreams() { if (parseRoute().page === 'streams') router(); }
 addonListEl.addEventListener('click', e => {
   if (e.target.closest('.addon-remove')) { confirmRemove = +e.target.closest('.addon-remove').dataset.i; renderAddonList(); return; }
   if (e.target.closest('.addon-cancel')) { confirmRemove = -1; renderAddonList(); return; }
@@ -1942,7 +1815,7 @@ torrentSwitch.addEventListener('click', () => {
   TORRENTS_ON = !TORRENTS_ON;
   try { localStorage.setItem(TORRENT_KEY, TORRENTS_ON ? '1' : '0'); } catch (_) {}
   syncTorrentSwitch();
-  setStatus(TORRENTS_ON ? 'Torrent links enabled.' : 'Torrent links disabled.', 'ok');
+  setStatus(TORRENTS_ON ? 'Magnet links enabled.' : 'Magnet links disabled.', 'ok');
   refreshStreams();
 });
 syncTorrentSwitch();
@@ -2026,5 +1899,5 @@ document.addEventListener('error', e => {
 loadSaved();
 router();
 onNav.k = location.pathname + location.search + location.hash;
-// build the local suggestion index after the first screen is up (saved copy first, fresh feed in the background)
-(window.requestIdleCallback || (f => setTimeout(f, 1200)))(initLocalSearch);
+// the old local title index is gone: free the space it used on this device
+try { indexedDB.deleteDatabase('openstream_local'); } catch (_) {}
