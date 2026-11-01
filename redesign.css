@@ -72,8 +72,7 @@ button,.icon-btn,.logo,.tabs button,.chip,.g-chip,.rchip,.s-tag,.rating-pill,.s-
 a,img{-webkit-user-drag:none}
 input,textarea{-webkit-user-select:text;user-select:text}
 
-/* ---- v23: suggestions heading, copy-original-link icon, search skeletons ---- */
-.sh-head + .sug-row{border-top:0}
+/* ---- v23: copy-original-link icon, search skeleton rows ---- */
 .s-card .s-btns.has-cp{grid-template-columns:1fr auto}
 .s-btns .cp{display:flex;align-items:center;justify-content:center;width:40px;padding:0;background:var(--surface-2);color:var(--muted);border:1px solid var(--line);border-radius:8px;cursor:pointer}
 .s-btns .cp svg{width:15px;height:15px;flex:none}
@@ -82,17 +81,15 @@ input,textarea{-webkit-user-select:text;user-select:text}
   .s-btns .cp{transition:transform .22s cubic-bezier(.2,.8,.2,1),color .15s}
   .s-btns .cp:hover{transform:scale(1.08);color:var(--text)}
 }
-.p-card.sk{pointer-events:none}
-.p-card.sk .p-img,.p-card.sk .p-name,.p-card.sk .p-year,.sk-line{
-  background:linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);
+.list-row.sk{pointer-events:none}
+.list-row.sk .list-thumb,.list-row.sk .sk-t,.list-row.sk .sk-m{
+  background:linear-gradient(90deg,var(--surface-2) 25%,var(--line) 50%,var(--surface-2) 75%);
   background-size:200% 100%;animation:sk-shimmer 1.3s linear infinite}
-.p-card.sk .p-img{border-color:transparent}
-.p-card.sk .p-name{height:11px;width:80%;margin-top:8px;border-radius:4px}
-.p-card.sk .p-year{height:9px;width:40%;margin-top:6px;border-radius:4px}
-.sk-line{display:inline-block;width:96px;height:16px;border-radius:5px;vertical-align:middle}
+.list-row.sk .sk-t{height:14px;width:70%;border-radius:4px}
+.list-row.sk .sk-m{height:10px;width:38%;border-radius:4px;margin-top:9px}
 @keyframes sk-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){
-  .p-card.sk .p-img,.p-card.sk .p-name,.p-card.sk .p-year,.sk-line{animation:none}
+  .list-row.sk .list-thumb,.list-row.sk .sk-t,.list-row.sk .sk-m{animation:none}
 }
 
 /* ======================================================================
@@ -155,13 +152,24 @@ input,textarea{-webkit-user-select:text;user-select:text}
   --bg:#100e0c;--surface:#1b1712;--surface-2:#24201a;--line:#322b21;
   --text:#f1e9d8;--muted:#8f8471;--gold:#cda24e;color:var(--text)}
 
-/* light-mode fixes: chip icons were hard-coded white; skeletons need more contrast on cream */
+/* light-mode fix: chip icons were hard-coded white */
 :root[data-theme="light"] .rci{color:var(--muted)}
 :root[data-theme="light"] .rchip.res .rci{color:#fff}
-:root[data-theme="light"] .p-card.sk .p-img,
-:root[data-theme="light"] .p-card.sk .p-name,
-:root[data-theme="light"] .p-card.sk .p-year,
-:root[data-theme="light"] .sk-line{
-  background:linear-gradient(90deg,var(--surface-2) 25%,var(--line) 50%,var(--surface-2) 75%);
-  background-size:200% 100%}
-:root[data-theme="light"] .p-card.sk .p-img{border-color:var(--line)}
+
+/* v27: every episode card is the same height; long titles / descriptions are cut with "..." */
+.episode-row{height:84px;min-height:0;overflow:hidden}
+.episode-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+.episode-overview{display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5}
+
+/* v28: app feel - no pinch / double-tap zoom; compact "Searching..." line in the search box */
+html{touch-action:pan-x pan-y}
+.search-results-panel .state-msg.compact{padding:16px 0 2px}
+
+/* v29: season switch must not move the list; episode date + IMDb rating */
+.season-block + .season-block{margin-top:0} /* the hidden blocks used to push the open one down by 18px */
+.episode-row{height:104px}
+.episode-meta{display:flex;align-items:center;gap:14px;margin-top:3px;font-size:11.5px;line-height:16px;color:var(--muted);white-space:nowrap;overflow:hidden}
+.episode-meta svg{flex:none;width:13px;height:13px}
+.ep-date,.ep-rate{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.ep-rate svg.imdb{width:28px;height:14px}
+.ep-rate b{font-weight:600;color:var(--text)}
