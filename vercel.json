@@ -1,6 +1,9 @@
 {
   "rewrites": [
-    { "source": "/t/:type/:id", "destination": "/api/title?type=:type&id=:id" }
+    { "source": "/t/:type/:id", "destination": "/api/title?type=:type&id=:id" },
+    { "source": "/c/:type/:id", "destination": "/index.html" },
+    { "source": "/c/:type/:id/:genre", "destination": "/index.html" },
+    { "source": "/watchlist", "destination": "/index.html" }
   ],
   "functions": {
     "api/title.js": { "includeFiles": "index.html" }
