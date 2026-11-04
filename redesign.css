@@ -173,3 +173,8 @@ html{touch-action:pan-x pan-y}
 .ep-date,.ep-rate{display:inline-flex;align-items:center;gap:5px;min-width:0}
 .ep-rate svg.imdb{width:28px;height:14px}
 .ep-rate b{font-weight:600;color:var(--text)}
+
+/* v29+: seeders chip, upcoming episode tag */
+.rchip.seed{color:var(--gold)}
+.rchip.seed .rci{width:12px;height:12px;flex:none;fill:none;color:inherit}
+.ep-soon{font-style:normal;color:var(--gold);margin-left:2px}
