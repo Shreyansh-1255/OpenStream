@@ -559,6 +559,12 @@ function copyLink(el) {
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(done, fallback);
   else fallback();
 }
+function seedChip(st) {
+  if (!st._tor) return '';
+  const m = (st.description || st.title || '').match(/\u{1F464}\s*(\d+)/u);
+  if (!m) return '';
+  return `<span class="rchip seed" title="Seeders: people sharing this magnet right now"><svg class="rci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(m[1])} Seeders</span>`;
+}
 function releaseChips(st, showServer = true) {
   const q = qualityOf(st);
   const size = sizeOf(st);
@@ -567,6 +573,7 @@ function releaseChips(st, showServer = true) {
   return `<div class="rchips">`
     + (q ? `<span class="rchip ${q === '4K' ? 'res' : ''}">${esc(q)}</span>` : '')
     + (size ? `<span class="rchip">${esc(size)}</span>` : '')
+    + seedChip(st)
     + (showServer && sv.label ? `<span class="rchip">${esc(sv.label)}</span>` : '')
     + (pr ? `<span class="rchip"><svg class="rci" viewBox="0 0 512 512" aria-hidden="true"><use href="#i-${pr.key}"/></svg>${esc(pr.label)}</span>` : '')
     + `</div>`;
@@ -646,6 +653,12 @@ function levenshtein(a, b) {
 }
 const similarity = (a, b) => 1 - levenshtein(a, b) / Math.max(a.length, b.length, 1);
 // 0 = no match. 100 exact ... 15 loose match, 31-45 = close spelling (typo tolerance)
+const SEARCH_STOP = new Set(['a', 'an', 'the', 'of', 'and', 'in', 'on', 'at', 'to', 'for', 'by', 'with']);
+function sigTokens(norm) { // words that matter (skips a / the / of ...); falls back to all words
+  const all = norm.split(' ').filter(Boolean);
+  const sig = all.filter(w => !SEARCH_STOP.has(w));
+  return sig.length ? sig : all;
+}
 function matchScore(name, query) {
   const n = normalizeText(name);
   const q = normalizeText(query);
@@ -656,11 +669,20 @@ function matchScore(name, query) {
   if ((' ' + n + ' ').includes(' ' + q + ' ')) return 50;
   if (n.includes(q)) return 20;
   if (n.replace(/ /g, '').includes(q.replace(/ /g, ''))) return 15;
-  if (q.length < 4) return 0;
+  // word overlap: "a knight of seven kingdoms" vs "A Knight of the Seven Kingdoms" (small words ignored)
+  let cov = 0;
+  const qt = sigTokens(q);
+  if (qt.length >= 2) {
+    const nt = new Set(sigTokens(n));
+    const hit = qt.filter(t => nt.has(t)).length;
+    if (hit === qt.length) return 60;
+    if (hit >= 2) cov = Math.round(40 * hit / qt.length);
+  }
+  if (q.length < 4) return cov;
   let sim = similarity(n, q);
   if (n.length > q.length) sim = Math.max(sim, similarity(n.slice(0, q.length), q));
   if (!q.includes(' ')) n.split(' ').forEach(w => { sim = Math.max(sim, similarity(w, q)); });
-  return sim >= 0.7 ? Math.round(sim * 45) : 0;
+  return Math.max(cov, sim >= 0.7 ? Math.round(sim * 45) : 0);
 }
 
 function cacheSet(map, key, val, max) {
@@ -700,10 +722,20 @@ async function cinemetaSearch(query, signal) {
 // Typo help (Cinemeta only): when a search finds little, also search slightly shorter versions of the query
 function fuzzyAlternatives(nq) {
   const alts = [];
-  if (nq.length >= 5) alts.push(nq.slice(0, -1));
-  const w = nq.split(' ').filter(x => x.length >= 4).sort((a, b) => b.length - a.length)[0];
-  if (nq.includes(' ') && w) alts.push(w);
-  return alts.slice(0, 2);
+  const toks = nq.split(' ').filter(Boolean);
+  // "a knight of seven kingdoms" -> "a knight of the seven kingdoms" (a missing "the" breaks the search)
+  if (toks.length >= 3) {
+    const withThe = [];
+    toks.forEach((w, i) => { withThe.push(w); if (['of', 'in', 'on', 'at', 'to'].includes(w) && toks[i + 1] && toks[i + 1] !== 'the') withThe.push('the'); });
+    alts.push(withThe.join(' '));
+  }
+  // only the important words: "knight seven kingdoms"
+  const sig = toks.filter(w => !SEARCH_STOP.has(w));
+  if (sig.length >= 2 && sig.length < toks.length) alts.push(sig.join(' '));
+  if (nq.length >= 5) alts.push(nq.slice(0, -1)); // typo: last letter
+  const w = toks.filter(x => x.length >= 4).sort((a, b) => b.length - a.length)[0];
+  if (toks.length > 1 && w) alts.push(w);
+  return [...new Set(alts)].filter(a => a && a !== nq).slice(0, 4);
 }
 
 function dedupeItems(items) {
@@ -995,10 +1027,9 @@ async function openFromLink(link, stale) {
   const offline = res.every(r => r.status === 'rejected' && !/^HTTP /.test(String(r.reason && r.reason.message)));
   setStateEl(searchStateEl, offline ? 'Could not load. Check your connection and try again.' : 'No movie or series found for this link.', true);
 }
-// text + placeholder rows instead of an empty box while the search starts
+// placeholder rows instead of an empty box while the search starts
 function showSearching() {
-  setStateEl(searchStateEl, 'Searching...');
-  searchStateEl.classList.add('compact');
+  setStateEl(searchStateEl, null); // placeholder rows are enough, no text
   searchListEl.innerHTML = SK_ROW.repeat(3);
 }
 function renderSearch(loading) { // loading = a search is still running
@@ -1502,7 +1533,7 @@ function renderTitle(meta) {
         ${meta.imdbRating ? `<span class="rating-pill">${esc(meta.imdbRating)}</span>` : ''}
         <div class="chip-row">
           ${genres.slice(0, 4).map(g => `<span class="chip">${esc(g)}</span>`).join('')}
-          ${meta.runtime ? `<span class="chip outline">${ICONS.clock}${esc(meta.runtime)}</span>` : ''}
+          ${meta.runtime ? `<span class="chip outline">${ICONS.clock}${esc(fmtRuntime(meta.runtime))}</span>` : ''}
         </div>
       </div>
 
@@ -1565,6 +1596,29 @@ function rememberSeason(id, season) {
   try { sessionStorage.setItem(SEASON_KEY, JSON.stringify(Object.fromEntries(seasonMemo))); } catch (_) {}
 }
 
+// "112 min" -> "1h 52m", "123min" -> "2h 03m", "45 min" -> "45m"
+function fmtRuntime(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (!t) return '';
+  const hm = t.match(/^(\d+)\s*h\w*\s*(?:(\d+)\s*m\w*)?$/i);
+  let total = null;
+  if (hm) total = (+hm[1]) * 60 + (+hm[2] || 0);
+  else { const mm = t.match(/^(\d+)\s*(?:min\w*|m)?$/i); if (mm) total = +mm[1]; }
+  if (total == null || !(total > 0)) return t;
+  const h = Math.floor(total / 60), m = total % 60;
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+// episode date is after today (compared by calendar day) -> not aired yet
+function isUpcoming(v) {
+  if (!v) return false;
+  const d = new Date(v);
+  if (isNaN(d)) return false;
+  const n = new Date();
+  const today = n.getFullYear() * 10000 + (n.getMonth() + 1) * 100 + n.getDate();
+  const ep = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  return ep > today;
+}
+
 // "2026-10-16T00:00:00.000Z" -> "16 October 2026" (UTC, so the day never shifts with the time zone)
 function fmtEpDate(v) {
   if (!v) return '';
@@ -1574,9 +1628,11 @@ function fmtEpDate(v) {
 function epRating(ep) { const n = parseFloat(ep.rating ?? ep.imdbRating); return n > 0 ? n.toFixed(1) : ''; }
 
 function episodeMeta(ep) {
-  const d = fmtEpDate(ep.released || ep.firstAired), r = epRating(ep);
+  const raw = ep.released || ep.firstAired;
+  const d = fmtEpDate(raw), r = epRating(ep);
   if (!d && !r) return '';
-  return `<div class="episode-meta">${d ? `<span class="ep-date">${ICONS.calendar}<span>${esc(d)}</span></span>` : ''}${r ? `<span class="ep-rate">${ICONS.imdb}<b>${esc(r)}</b></span>` : ''}</div>`;
+  const soon = d && isUpcoming(raw) ? ' <em class="ep-soon">(Upcoming)</em>' : '';
+  return `<div class="episode-meta">${d ? `<span class="ep-date">${ICONS.calendar}<span>${esc(d)}${soon}</span></span>` : ''}${r ? `<span class="ep-rate">${ICONS.imdb}<b>${esc(r)}</b></span>` : ''}</div>`;
 }
 
 function renderEpisodes(meta) {
