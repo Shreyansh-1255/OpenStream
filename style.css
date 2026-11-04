@@ -345,7 +345,7 @@ svg { display: block; }
   display: flex; align-items: center; justify-content: center; gap: 9px;
   background: var(--text);
   color: #191510;
-  border: none;
+  border: 1px solid transparent; /* same size as the .saved state, so the page below never jumps */
   border-radius: var(--radius-s);
   padding: 14px;
   font-size: 14px;
@@ -631,4 +631,3 @@ body.lock{overflow:hidden}
 .sr-bar svg{width:16px;height:16px;flex:none;color:var(--muted)}
 .sr-bar span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sr-count{margin-left:8px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;color:var(--muted)}
-
