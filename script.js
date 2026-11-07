@@ -1789,4 +1789,151 @@ function openSettings() {
 function closeSettings() { setOverlay.classList.remove('open'); document.body.classList.remove('lock'); }
 document.getElementById('addonClose').addEventListener('click', closeSettings);
 setOverlay.addEventListener('click', e => { if (e.target === setOverlay) closeSettings(); });
-document.addEventListener('keydown', 
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
+function refreshStreams() { if (parseRoute().page === 'streams') router(); }
+addonListEl.addEventListener('click', e => {
+  if (e.target.closest('.addon-remove')) { confirmRemove = +e.target.closest('.addon-remove').dataset.i; renderAddonList(); return; }
+  if (e.target.closest('.addon-cancel')) { confirmRemove = -1; renderAddonList(); return; }
+  if (e.target.closest('.addon-confirm')) {
+    if (confirmRemove < 0 || confirmRemove >= ADDONS.length) return;
+    const gone = ADDONS.splice(confirmRemove, 1)[0];
+    confirmRemove = -1;
+    saveAddons();
+    renderAddonList();
+    setStatus(`Removed ${gone.name}.`, 'ok');
+    refreshStreams();
+  }
+});
+
+// An https:// page cannot call plain http:// servers (browsers block it), except localhost.
+function mixedContentBlocked(url, proto = location.protocol) {
+  return proto === 'https:' && /^http:\/\//i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(url);
+}
+class AddonError extends Error {}
+async function addAddon() {
+  if (!addonInput.value.trim()) { setStatus('Paste an addon URL first.', 'err'); return; }
+  const p = parseAddonUrl(addonInput.value);
+  if (!p) { setStatus('Enter a valid http(s):// or stremio:// URL.', 'err'); return; }
+  if (ADDONS.some(a => a.base === p.base && (a.query || '') === p.query)) { setStatus('This addon is already added.', 'err'); return; }
+  if (mixedContentBlocked(p.base)) { setStatus('This page runs on https, so the browser blocks http:// addon URLs. Use the https:// version of the addon URL.', 'err'); return; }
+  setStatus('Checking addon...');
+  addonAddBtn.disabled = true;
+  try {
+    const r = await fetch(p.base + '/manifest.json' + p.query, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new AddonError(`The addon server returned HTTP ${r.status}.`);
+    let m;
+    try { m = await r.json(); } catch (_) { throw new AddonError('That URL did not return a valid addon manifest.'); }
+    const res = (Array.isArray(m.resources) ? m.resources : []).find(x => (typeof x === 'string' ? x : x && x.name) === 'stream');
+    if (!res) throw new AddonError('This addon does not provide streams.');
+    const types = (res && res.types) || m.types;
+    const idPrefixes = (res && res.idPrefixes) || m.idPrefixes;
+    if (Array.isArray(types) && !types.some(x => x === 'movie' || x === 'series')) throw new AddonError('This addon does not support movies or series.');
+    const name = String(m.name || hostOf(p.base)).slice(0, 60);
+    ADDONS.push({ name, base: p.base, query: p.query, types: Array.isArray(types) ? types : null, idPrefixes: Array.isArray(idPrefixes) ? idPrefixes : null });
+    saveAddons();
+    renderAddonList();
+    addonInput.value = '';
+    setStatus('Added: ' + name, 'ok');
+    refreshStreams();
+  } catch (e) {
+    setStatus(e instanceof AddonError ? e.message
+      : e && e.name === 'TimeoutError' ? 'The addon took too long to respond.'
+      : e instanceof TypeError ? 'Could not reach the addon. Check your connection, or the server may block requests from browsers (CORS).'
+      : 'Something went wrong while checking the addon.', 'err');
+  } finally { addonAddBtn.disabled = false; }
+}
+addonAddBtn.addEventListener('click', addAddon);
+addonInput.addEventListener('keydown', e => { if (e.key === 'Enter') addAddon(); });
+
+const torrentSwitch = document.getElementById('torrentSwitch');
+function syncTorrentSwitch() { torrentSwitch.setAttribute('aria-checked', TORRENTS_ON ? 'true' : 'false'); }
+torrentSwitch.addEventListener('click', () => {
+  TORRENTS_ON = !TORRENTS_ON;
+  try { localStorage.setItem(TORRENT_KEY, TORRENTS_ON ? '1' : '0'); } catch (_) {}
+  syncTorrentSwitch();
+  setStatus(TORRENTS_ON ? 'Magnet links enabled.' : 'Magnet links disabled.', 'ok');
+  refreshStreams();
+});
+syncTorrentSwitch();
+
+const dbFile = document.getElementById('dbFile');
+// keep only known fields of an imported addon and re-validate its URL
+function sanitizeAddon(a) {
+  if (!a || typeof a.base !== 'string') return null;
+  const p = parseAddonUrl(a.base + (typeof a.query === 'string' ? a.query : ''));
+  if (!p) return null;
+  const arr = v => Array.isArray(v) ? v.filter(x => typeof x === 'string').slice(0, 20) : null;
+  const name = (typeof a.name === 'string' && a.name.trim()) ? a.name.trim() : hostOf(p.base);
+  return { name: name.slice(0, 60), base: p.base, query: p.query, types: arr(a.types), idPrefixes: arr(a.idPrefixes) };
+}
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+document.getElementById('dbExport').addEventListener('click', () => {
+  const list = readSaved();
+  if (!ADDONS.length && !list.length) { setStatus('Nothing to export yet. Add an addon or save a title first.', 'err'); return; }
+  const blob = new Blob([JSON.stringify({ app: 'openstream', version: 2, exportedAt: new Date().toISOString(), addons: ADDONS, watchlist: list }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `openstream-database-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  setStatus(`Exported ${plural(ADDONS.length, 'addon')} and ${plural(list.length, 'title')}.`, 'ok');
+});
+document.getElementById('dbImport').addEventListener('click', () => dbFile.click());
+dbFile.addEventListener('change', async () => {
+  const f = dbFile.files[0];
+  dbFile.value = '';
+  if (!f) return;
+  if (f.size > 2e6) { setStatus('That file is too large to be a database backup.', 'err'); return; }
+  try {
+    const data = JSON.parse(await f.text());
+    const wl = Array.isArray(data) ? data : (data && data.watchlist); // old watchlist-only backups still work
+    const ad = (data && !Array.isArray(data)) ? data.addons : undefined;
+    if (!Array.isArray(wl) && !Array.isArray(ad)) throw new Error('bad format');
+    let addedA = 0, addedW = 0, dup = 0, bad = 0;
+    // addons
+    const haveA = new Set(ADDONS.map(a => a.base + (a.query || '')));
+    (Array.isArray(ad) ? ad : []).forEach(x => {
+      const a = sanitizeAddon(x);
+      if (!a) { bad++; return; }
+      const k = a.base + a.query;
+      if (haveA.has(k)) { dup++; return; }
+      haveA.add(k);
+      ADDONS.push(a);
+      addedA++;
+    });
+    if (addedA) { saveAddons(); renderAddonList(); refreshStreams(); }
+    // watchlist
+    const str = v => (typeof v === 'string' || typeof v === 'number') ? String(v).slice(0, 500) : '';
+    const have = readSaved();
+    const keys = new Set(have.map(s => s.type + ':' + s.id));
+    (Array.isArray(wl) ? wl : []).forEach(x => {
+      if (!x || typeof x.id !== 'string' || !/^[\w:.-]+$/.test(x.id) || (x.type !== 'movie' && x.type !== 'series')) { bad++; return; }
+      if (keys.has(x.type + ':' + x.id)) { dup++; return; }
+      keys.add(x.type + ':' + x.id);
+      have.push({ id: x.id, type: x.type, name: str(x.name), poster: /^https?:\/\//i.test(x.poster || '') ? str(x.poster) : '', year: str(x.year), rating: str(x.rating), savedAt: str(x.savedAt) || new Date().toISOString() });
+      addedW++;
+    });
+    if (addedW) {
+      if (!writeSaved(have)) { setStatus('Could not save the watchlist: browser storage is full or blocked.', 'err'); return; }
+      loadSaved();
+    }
+    setStatus(`Imported ${plural(addedA, 'addon')} and ${plural(addedW, 'title')}` + (dup ? `, ${dup} already here` : '') + (bad ? `, ${bad} invalid skipped` : '') + '.', (addedA || addedW) ? 'ok' : '');
+  } catch (_) { setStatus('That file is not a valid OpenStream database backup.', 'err'); }
+});
+
+// Hide broken poster images instead of showing the browser's broken-image icon
+document.addEventListener('error', e => {
+  const i = e.target;
+  if (!i || i.tagName !== 'IMG') return;
+  const fb = i.dataset.fb;
+  if (fb) { delete i.dataset.fb; i.src = fb; return; } // fall back to the original poster size
+  const wrap = i.parentElement;
+  if (wrap && wrap.matches('.p-img, .list-thumb')) { i.remove(); wrap.insertAdjacentHTML('afterbegin', NO_POSTER); return; } // poster failed to load
+  i.style.visibility = 'hidden';
+}, true);
+
+loadSaved();
+router();
+onNav.k = location.pathname + location.search + location.hash;
+// the old local title index is gone: free the space it used on this device
+try { indexedDB.deleteDatabase('openstream_local'); } catch (_) {}
