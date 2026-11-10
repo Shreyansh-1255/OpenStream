@@ -180,9 +180,9 @@ html{touch-action:pan-x pan-y}
 .ep-soon{font-style:normal;color:var(--gold);margin-left:2px}
 
 /* stream cards: Copy link + Play in MPV/Outplayer, two equal half-width buttons */
-.s-card .s-btns,.s-card .s-btns.has-cp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.s-card .s-btns .sb{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;min-height:46px;padding:10px 8px;border-radius:10px;font:inherit;font-size:13px;font-weight:600;line-height:1.2;text-align:center;border:1px solid var(--line);background:var(--surface-2);color:var(--text);cursor:pointer}
-.s-card .s-btns .sb svg{width:15px;height:15px;flex:none}
+.s-card .s-btns,.s-card .s-btns.has-cp{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.s-card .s-btns .sb{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;padding:9px 6px;border-radius:8px;font:inherit;font-size:12px;font-weight:600;line-height:1.2;white-space:nowrap;text-align:center;border:1px solid var(--line);background:var(--surface-2);color:var(--text);cursor:pointer}
+.s-card .s-btns .sb svg{width:13px;height:13px;flex:none}
 .s-card .s-btns .sb.play{color:var(--gold);border-color:var(--gold)}
 .s-card .s-btns .sb.ok{color:var(--gold)}
 .srv-name{font-size:11px;color:var(--muted);margin:0 0 6px 2px}
