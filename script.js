@@ -399,8 +399,10 @@ function openInfo(st) {
   if (st._tor) { const sd = torrentSeeds(st); if (sd) rows.push(['Seeders', String(sd), 'Number of people sharing this magnet right now.']); }
   const m = st._tor ? Infinity : Math.min(...members.map(x => leftMs(x.url)));
   if (isFinite(m)) rows.push(['Link expires', 'in ' + Math.max(1, Math.round(m / 60000)) + ' min', 'This link is time-limited. Reload the page for a fresh one.']);
-  if (st._addon && sv.label !== st._addon) rows.push(['Addon', String(st._addon), '']);
-  document.getElementById('infoBody').innerHTML = infoHtml(file, rows);
+  if (st._addon && sv.label !== st._addon && !rows.some(r => r[1] === String(st._addon))) rows.push(['Addon', String(st._addon), '']);
+  const seen = new Set();
+  const uniq = rows.filter(r => { const k = r[0] + '\u0001' + r[1]; if (seen.has(k)) return false; seen.add(k); return true; });
+  document.getElementById('infoBody').innerHTML = infoHtml(file, uniq);
   infoModal.classList.add('open');
   document.body.classList.add('lock');
   document.getElementById('infoClose').focus({ preventScroll: true });
@@ -588,17 +590,32 @@ function downloadLabel(label) {
   const l = String(label || '').trim().replace(/^10\s*-?\s*gbps$/i, '10Gbps');
   return l ? `Download (${l})` : 'Download';
 }
+// Two equal buttons per link: Copy link + Play in an external player (Outplayer on iPhone/iPad, MPV elsewhere)
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+function playExternal(el) {
+  const url = el.dataset.url || '';
+  const m = url.match(/^(https?):\/\/(.+)$/i);
+  if (!m) { copyLink(el); return; }
+  const scheme = m[1].toLowerCase(), rest = m[2];
+  // same link formats Stremio uses: Outplayer = "outplayer://host/path", Android = intent://host/path#Intent;...
+  if (IS_IOS) location.href = 'outplayer://' + rest;
+  else if (IS_ANDROID) location.href = 'intent://' + rest + '#Intent;package=is.xyz.mpv;type=video/any;scheme=' + scheme + ';end';
+  else copyLink(el); // computer: no app to open, so just copy the link
+}
 function streamButtons(m, label) {
-  // Download opens the (PixelDrain-adjusted) link; the copy icon copies the ORIGINAL link exactly as the provider gave it
-  return `<div class="s-btns has-cp"><a class="dl" href="${esc(downloadUrl(m.url))}" target="_blank" rel="noopener noreferrer" download>${ICONS.download} ${esc(downloadLabel(label))}</a>` +
-    `<button type="button" class="cp" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link" title="Copy original link">${ICONS.copy}</button></div>`;
+  const play = IS_IOS ? 'Play in Outplayer' : 'Play in MPV';
+  const name = label ? `<div class="srv-name">${esc(label)}</div>` : '';
+  return name + `<div class="s-btns">` +
+    `<button type="button" class="sb" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link">${ICONS.copy} Copy link</button>` +
+    `<button type="button" class="sb play" data-url="${esc(m.url)}" onclick="playExternal(this)">${ICONS.play} ${play}</button></div>`;
 }
 function serverRow(buttons) {
   return `<div class="srv">${buttons}</div>`;
 }
 function streamCard(st, n) {
   const members = st._members || [st];
-  const rows = members.map((m, i) => serverRow(streamButtons(m, serverOf(m).label || (members.length > 1 ? 'Server ' + (i + 1) : '')))).join('');
+  const rows = members.map((m, i) => serverRow(streamButtons(m, members.length > 1 ? (serverOf(m).label || 'Server ' + (i + 1)) : ''))).join('');
   return `<div class="s-card">
     <button class="ib" type="button" data-n="${n}" aria-label="Show details">${INFO_IC}</button>
     ${releaseChips(st, false)}
