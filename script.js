@@ -631,151 +631,51 @@ function removeSaved(type, id) {
   return list;
 }
 
-/* ---------- Cinemeta search matching (same scoring as the old server) ---------- */
-function normalizeText(s) {
-  return (s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-}
-function levenshtein(a, b) {
-  if (a === b) return 0;
-  if (a.length > 60) a = a.slice(0, 60);
-  if (b.length > 60) b = b.slice(0, 60);
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const cur = [i];
-    for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    }
-    prev = cur;
-  }
-  return prev[b.length];
-}
-const similarity = (a, b) => 1 - levenshtein(a, b) / Math.max(a.length, b.length, 1);
-// 0 = no match. 100 exact ... 15 loose match, 31-45 = close spelling (typo tolerance)
-const SEARCH_STOP = new Set(['a', 'an', 'the', 'of', 'and', 'in', 'on', 'at', 'to', 'for', 'by', 'with']);
-function sigTokens(norm) { // words that matter (skips a / the / of ...); falls back to all words
-  const all = norm.split(' ').filter(Boolean);
-  const sig = all.filter(w => !SEARCH_STOP.has(w));
-  return sig.length ? sig : all;
-}
-function matchScore(name, query) {
-  const n = normalizeText(name);
-  const q = normalizeText(query);
-  if (!q || !n) return 0;
-  if (n === q) return 100;
-  if (n.startsWith(q + ' ')) return 80;
-  if (n.startsWith(q)) return 70;
-  if ((' ' + n + ' ').includes(' ' + q + ' ')) return 50;
-  if (n.includes(q)) return 20;
-  if (n.replace(/ /g, '').includes(q.replace(/ /g, ''))) return 15;
-  // word overlap: "a knight of seven kingdoms" vs "A Knight of the Seven Kingdoms" (small words ignored)
-  let cov = 0;
-  const qt = sigTokens(q);
-  if (qt.length >= 2) {
-    const nt = new Set(sigTokens(n));
-    const hit = qt.filter(t => nt.has(t)).length;
-    if (hit === qt.length) return 60;
-    if (hit >= 2) cov = Math.round(40 * hit / qt.length);
-  }
-  if (q.length < 4) return cov;
-  let sim = similarity(n, q);
-  if (n.length > q.length) sim = Math.max(sim, similarity(n.slice(0, q.length), q));
-  if (!q.includes(' ')) n.split(' ').forEach(w => { sim = Math.max(sim, similarity(w, q)); });
-  return Math.max(cov, sim >= 0.7 ? Math.round(sim * 45) : 0);
-}
-
 function cacheSet(map, key, val, max) {
   map.set(key, val);
   if (map.size > max) map.delete(map.keys().next().value);
 }
 
-// Same endpoint Stremio uses: Cinemeta's catalog search (matches titles, and cast/director names)
-const cinemetaSearchCache = new Map(); // finished searches are remembered, so repeating a query is instant
-const searchInflight = new Map();      // a search already on its way is shared (typing prefetch -> Enter reuses it)
-async function fetchCinemetaSearch(query, key) {
-  const types = ['movie', 'series'];
-  let failed = 0;
-  const batches = await Promise.all(types.map(async (t) => {
+// Search = IMDb only (its own suggestion endpoint). Tried straight from the browser first; if the browser
+// cannot reach it (CORS / network) the Vercel proxy /api/imdb-search is used instead. No Cinemeta in search.
+const imdbSearchCache = new Map();
+let imdbDirectOk = true; // turns false after a failed direct call, so later searches go straight to the proxy
+const IMDB_KIND = { movie: 'movie', tvMovie: 'movie', tvSeries: 'series', tvMiniSeries: 'series' };
+async function imdbFetchJson(query) {
+  const q = query.trim().toLowerCase();
+  const first = /[a-z0-9]/.test(q[0]) ? q[0] : 'x';
+  if (imdbDirectOk) {
     try {
-      const r = await fetch(`${CINEMETA}/catalog/${t}/top/search=${encodeURIComponent(query)}.json`, { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) { failed++; return []; }
-      const data = await r.json();
-      return (data.metas || []).map((m) => ({ ...m, mediaType: t }));
-    } catch (_) { failed++; return []; }
-  }));
-  const items = batches.flat();
-  if (!failed) cacheSet(cinemetaSearchCache, key, items, 60);
-  return { items, failed: failed === types.length };
-}
-async function cinemetaSearch(query, signal) {
-  const key = query.trim().toLowerCase();
-  const hit = cinemetaSearchCache.get(key);
-  if (hit) return { items: hit, failed: false };
-  let p = searchInflight.get(key);
-  if (!p) { p = fetchCinemetaSearch(query, key).finally(() => searchInflight.delete(key)); searchInflight.set(key, p); }
-  const r = await p;
-  // the request itself is never cancelled (its answer gets cached for later); a cancelled caller just ignores it
-  if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  return r;
-}
-// Typo help (Cinemeta only): when a search finds little, also search slightly shorter versions of the query
-function fuzzyAlternatives(nq) {
-  const alts = [];
-  const toks = nq.split(' ').filter(Boolean);
-  // "a knight of seven kingdoms" -> "a knight of the seven kingdoms" (a missing "the" breaks the search)
-  if (toks.length >= 3) {
-    const withThe = [];
-    toks.forEach((w, i) => { withThe.push(w); if (['of', 'in', 'on', 'at', 'to'].includes(w) && toks[i + 1] && toks[i + 1] !== 'the') withThe.push('the'); });
-    alts.push(withThe.join(' '));
+      const r = await fetch(`https://v3.sg.media-imdb.com/suggestion/${first}/${encodeURIComponent(q)}.json`, { signal: AbortSignal.timeout(6000) });
+      if (r.ok) return await r.json();
+    } catch (_) {}
+    imdbDirectOk = false;
   }
-  // only the important words: "knight seven kingdoms"
-  const sig = toks.filter(w => !SEARCH_STOP.has(w));
-  if (sig.length >= 2 && sig.length < toks.length) alts.push(sig.join(' '));
-  if (nq.length >= 5) alts.push(nq.slice(0, -1)); // typo: last letter
-  const w = toks.filter(x => x.length >= 4).sort((a, b) => b.length - a.length)[0];
-  if (toks.length > 1 && w) alts.push(w);
-  return [...new Set(alts)].filter(a => a && a !== nq).slice(0, 4);
+  const r = await fetch(`/api/imdb-search?q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error('imdb proxy ' + r.status);
+  return r.json();
+}
+async function imdbSearch(query) {
+  const key = query.trim().toLowerCase();
+  if (key.length < 2) return [];
+  const hit = imdbSearchCache.get(key);
+  if (hit) return hit;
+  const data = await imdbFetchJson(query);
+  const items = (data.d || [])
+    .filter(x => x && /^tt\d+$/.test(x.id || '') && IMDB_KIND[x.qid])
+    .map(x => ({
+      id: x.id, imdb_id: x.id, name: x.l, mediaType: IMDB_KIND[x.qid],
+      poster: x.i && x.i.imageUrl ? x.i.imageUrl.replace(/\._V1_\.jpg$/, '._V1_UX200_.jpg') : '',
+      releaseInfo: x.yr || (x.y ? String(x.y) : ''),
+    }));
+  cacheSet(imdbSearchCache, key, items, 60);
+  return items;
 }
 
-function dedupeItems(items) {
-  const seen = new Set();
-  return items.filter(m => { const k = m.mediaType + ':' + (m.imdb_id || m.id); if (seen.has(k)) return false; seen.add(k); return true; });
-}
-// Rank: closest title first, but NEVER drop results whose title doesn't match (director/actor searches)
-function rankItems(items, query) {
-  return items
-    .map((m, i) => {
-      let s = matchScore(m.name, query);
-      if (m._alt) s = Math.max(s, Math.round(matchScore(m.name, m._alt) * 0.95));
-      return { m, s, i };
-    })
-    .sort((a, b) => b.s - a.s || a.m._src - b.m._src || a.i - b.i)
-    .slice(0, 60)
-    .map(({ m }) => { const { _src, _alt, ...rest } = m; return rest; });
-}
-
-// Cinemeta results are shown the moment they arrive (onPartial); if the query looks misspelled,
-// slightly shorter versions of it are searched on Cinemeta too and merged in afterwards.
 async function searchTitles(query, onPartial, signal) {
-  const nq = normalizeText(query);
-  const first = await cinemetaSearch(query, signal);
-  if (first.failed) throw new Error('search failed');
-  let items = dedupeItems(first.items.map(m => ({ ...m, _src: 0 })));
-  const best = items.reduce((b, m) => Math.max(b, matchScore(m.name, query)), 0);
-  // Few or no close title matches: the query may be misspelled, so try corrected versions too.
-  const needFuzzy = nq.length >= 3 && (items.length < 3 || best < 60);
-  if (!needFuzzy) return rankItems(items, query);
-
-  if (items.length && onPartial) onPartial(rankItems(items, query)); // show what we have right now
-  const alts = fuzzyAlternatives(nq);
-  if (!alts.length) return rankItems(items, query);
-  const extra = await Promise.all(alts.map(a => cinemetaSearch(a, signal).catch(e => {
-    if (signal && signal.aborted) throw e;
-    return { items: [], failed: true };
-  })));
-  extra.forEach((res, i) => res.items.forEach(m => items.push({ ...m, _src: i + 1, _alt: alts[i] })));
-  return rankItems(dedupeItems(items), query);
+  const items = await imdbSearch(query);
+  if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+  return items;
 }
 
 async function getMeta(type, id) {
@@ -869,7 +769,7 @@ function setStateEl(el, msg, isError) {
   }
 }
 
-/* ---- search box: results appear right here (Cinemeta only); recent searches show while the box is empty ---- */
+/* ---- search box: results appear right here (IMDb only); recent searches show while the box is empty ---- */
 let searchResults = [];
 let debounceTimer = null, searchCtl = null, searchSeq = 0;
 function openSearch() {
@@ -936,7 +836,7 @@ document.getElementById('searchForm').addEventListener('submit', (e) => {
   runSearch(qInput.value);
 });
 
-// Search Cinemeta; rows appear as soon as the first answer arrives, and grey placeholder rows show while more may still come
+// Search IMDb; grey placeholder rows show until the answer arrives
 function runSearch(query) {
   clearTimeout(debounceTimer);
   if (searchCtl) searchCtl.abort();
