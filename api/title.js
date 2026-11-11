@@ -38,7 +38,10 @@ module.exports = async (req, res) => {
         const url = `https://${host}/t/${type}/${encodeURIComponent(id)}`;
         const title = m.releaseInfo ? `${m.name} (${m.releaseInfo})` : m.name;
         const desc = shorten(m.description) || 'Watch on OpenStream';
-        const img = m.background || m.poster || '';
+        const plain = m.background || m.poster || '';
+        // background + the title's logo at the bottom-left, drawn by /api/og (falls back to the plain image)
+        const withLogo = !!(m.background && /^https?:\/\//i.test(m.logo || ''));
+        const img = withLogo ? `https://${host}/api/og?type=${type}&id=${encodeURIComponent(id)}` : plain;
         const tags = [
           `<meta property="og:type" content="${type === 'movie' ? 'video.movie' : 'video.tv_show'}">`,
           `<meta property="og:site_name" content="OpenStream">`,
@@ -46,6 +49,9 @@ module.exports = async (req, res) => {
           `<meta property="og:title" content="${esc(title)}">`,
           `<meta property="og:description" content="${esc(desc)}">`,
           img && `<meta property="og:image" content="${esc(img)}">`,
+          withLogo && `<meta property="og:image:type" content="image/jpeg">`,
+          withLogo && `<meta property="og:image:width" content="1200">`,
+          withLogo && `<meta property="og:image:height" content="630">`,
           `<meta name="twitter:card" content="summary_large_image">`,
           `<meta name="twitter:title" content="${esc(title)}">`,
           `<meta name="twitter:description" content="${esc(desc)}">`,
