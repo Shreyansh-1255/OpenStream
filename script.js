@@ -139,6 +139,8 @@ async function initStreamsView(type, id, name) {
     const sel = (addonFilter && counts[addonFilter] > 0) ? addonFilter : ''; // chosen addon has nothing for this title: show everything
     aTabsEl.innerHTML = [''].concat(names).map(n => `<button type="button" data-a="${esc(n)}" class="${n === sel ? 'on' : ''}"${n && !counts[n] ? ' disabled' : ''}>${n ? esc(n) : 'All'}</button>`).join('');
     aTabsEl.style.display = total && names.length > 1 ? '' : 'none';
+    const onTab = aTabsEl.querySelector('.on'); // keep the selected addon in view
+    if (onTab) aTabsEl.scrollLeft = onTab.offsetLeft - (aTabsEl.clientWidth - onTab.offsetWidth) / 2;
     // with an addon selected, each card keeps only that addon's download buttons
     const g = !sel ? groups : groups.map(s => {
       const ms = s._members.filter(m => m._addon === sel);
@@ -593,19 +595,49 @@ function downloadLabel(label) {
 // Two equal buttons per link: Copy link + Play in an external player (Outplayer on iPhone/iPad, MPV elsewhere)
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
+// "Play in ..." can't ask the phone whether the app exists, so: open the app link and watch whether the page is left
+// (the app opened). If the page just stays there, the app is most likely missing -> tell the person to install it.
+let playToastTimer;
+function showPlayToast(app, installUrl) {
+  let t = document.getElementById('playToast');
+  if (!t) { t = document.createElement('div'); t.id = 'playToast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.innerHTML = `<span>${esc(app)} is not installed. Please install it first.</span><a href="${esc(installUrl)}" target="_blank" rel="noopener noreferrer">Install</a><button type="button" aria-label="Close">&times;</button>`;
+  t.querySelector('button').onclick = () => t.classList.remove('show');
+  t.classList.add('show');
+  clearTimeout(playToastTimer);
+  playToastTimer = setTimeout(() => t.classList.remove('show'), 9000);
+}
+function launchApp(href, app, installUrl) {
+  let left = false;
+  const mark = () => { left = true; };
+  const vis = () => { if (document.hidden) left = true; };
+  window.addEventListener('blur', mark);
+  window.addEventListener('pagehide', mark);
+  document.addEventListener('visibilitychange', vis);
+  location.href = href;
+  setTimeout(() => {
+    window.removeEventListener('blur', mark);
+    window.removeEventListener('pagehide', mark);
+    document.removeEventListener('visibilitychange', vis);
+    if (!left && !document.hidden) showPlayToast(app, installUrl);
+  }, 2200);
+}
 function playExternal(el) {
   const url = el.dataset.url || '';
   const m = url.match(/^(https?):\/\/(.+)$/i);
   if (!m) { copyLink(el); return; }
   const scheme = m[1].toLowerCase(), rest = m[2];
   // same link formats Stremio uses: Outplayer = "outplayer://host/path", Android = intent://host/path#Intent;...
-  if (IS_IOS) location.href = 'outplayer://' + rest;
-  else if (IS_ANDROID) location.href = 'intent://' + rest + '#Intent;package=is.xyz.mpv;type=video/any;scheme=' + scheme + ';end';
+  if (IS_IOS) launchApp('outplayer://' + rest, 'Outplayer', 'https://apps.apple.com/app/id1449923287');
+  else if (IS_ANDROID) launchApp('intent://' + rest + '#Intent;package=is.xyz.mpv;type=video/any;scheme=' + scheme + ';end', 'MPV', 'https://play.google.com/store/apps/details?id=is.xyz.mpv');
   else copyLink(el); // computer: no app to open, so just copy the link
 }
-function streamButtons(m, label) {
+// 10Gbps servers are download-only (they can't be streamed), so they get a single Copy button
+const isDownloadOnly = label => /^10\s*-?\s*gbps$/i.test(String(label || '').trim());
+function streamButtons(m, label, dlOnly) {
   const play = IS_IOS ? 'Play in Outplayer' : 'Play in MPV';
   const name = label ? `<div class="srv-name">${esc(label)}</div>` : '';
+  if (dlOnly) return name + `<div class="s-btns one"><button type="button" class="sb" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link">${ICONS.copy} Copy link (download only)</button></div>`;
   return name + `<div class="s-btns">` +
     `<button type="button" class="sb" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link">${ICONS.copy} Copy link</button>` +
     `<button type="button" class="sb play" data-url="${esc(m.url)}" onclick="playExternal(this)">${ICONS.play} ${play}</button></div>`;
@@ -615,7 +647,7 @@ function serverRow(buttons) {
 }
 function streamCard(st, n) {
   const members = st._members || [st];
-  const rows = members.map((m, i) => serverRow(streamButtons(m, members.length > 1 ? (serverOf(m).label || 'Server ' + (i + 1)) : ''))).join('');
+  const rows = members.map((m, i) => { const lb = serverOf(m).label, dl = isDownloadOnly(lb); return serverRow(streamButtons(m, (members.length > 1 || dl) ? (lb || 'Server ' + (i + 1)) : '', dl)); }).join('');
   return `<div class="s-card">
     <button class="ib" type="button" data-n="${n}" aria-label="Show details">${INFO_IC}</button>
     ${releaseChips(st, false)}
