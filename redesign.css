@@ -186,3 +186,20 @@ html{touch-action:pan-x pan-y}
 .s-card .s-btns .sb.play{color:var(--gold);border-color:var(--gold)}
 .s-card .s-btns .sb.ok{color:var(--gold)}
 .srv-name{font-size:11px;color:var(--muted);margin:0 0 6px 2px}
+
+/* download-only (10Gbps) servers: one full-width button */
+.s-card .s-btns.one{grid-template-columns:1fr}
+
+/* addon tabs: one line each, sideways scroll with a soft fade at the edge (like Stremio) */
+#aTabs{flex-wrap:nowrap;overflow-x:auto;gap:8px;margin:12px 0 14px;padding:2px 28px 2px 2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}
+#aTabs::-webkit-scrollbar{display:none}
+#aTabs button{flex:none;white-space:nowrap;height:40px;padding:0 18px;font-size:14px;border:1px solid transparent;background:transparent;color:var(--muted)}
+#aTabs button.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+#aTabs button:disabled{opacity:.35}
+
+/* "app not installed" message */
+#playToast{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));max-width:420px;margin:0 auto;z-index:1000;display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:var(--surface-2);color:var(--text);border:1px solid var(--gold);font-size:13px;line-height:1.35;box-shadow:0 8px 30px rgba(0,0,0,.5);opacity:0;transform:translateY(16px);pointer-events:none;transition:opacity .2s,transform .2s}
+#playToast.show{opacity:1;transform:none;pointer-events:auto}
+#playToast span{flex:1}
+#playToast a{color:var(--gold);font-weight:700;text-decoration:none;white-space:nowrap}
+#playToast button{background:none;border:0;color:var(--muted);font-size:20px;line-height:1;padding:0 2px;cursor:pointer}
