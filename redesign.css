@@ -179,12 +179,16 @@ html{touch-action:pan-x pan-y}
 .rchip.seed .rci{width:12px;height:12px;flex:none;fill:none;color:inherit}
 .ep-soon{font-style:normal;color:var(--gold);margin-left:2px}
 
-/* stream cards: Copy link + Play in MPV/Outplayer, two equal half-width buttons */
-.s-card .s-btns,.s-card .s-btns.has-cp{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.s-card .s-btns .sb{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;padding:9px 6px;border-radius:8px;font:inherit;font-size:12px;font-weight:600;line-height:1.2;white-space:nowrap;text-align:center;border:1px solid var(--line);background:var(--surface-2);color:var(--text);cursor:pointer}
-.s-card .s-btns .sb svg{width:13px;height:13px;flex:none}
-.s-card .s-btns .sb.play{color:var(--gold);border-color:var(--gold)}
-.s-card .s-btns .sb.ok{color:var(--gold)}
+/* stream cards: same look as the v17 buttons - gold Play, dark Copy, two equal halves */
+.s-card .s-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.s-card .s-btns .sb{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;padding:12px;border-radius:10px;font:inherit;font-size:13px;font-weight:600;line-height:1.2;white-space:nowrap;text-align:center;border:1px solid var(--line);cursor:pointer}
+.s-card .s-btns .sb svg{width:16px;height:16px;flex:none}
+.s-card .s-btns .sb.dl{background:var(--surface-2);color:var(--text)}
+.s-card .s-btns .sb.vlc{background:var(--gold);color:#1a1409;border-color:var(--gold)}
+.s-card .s-btns .sb.dl.ok{color:var(--gold)}
+@media (max-width:599px){.s-card .s-btns{gap:6px}.s-card .s-btns .sb{border-radius:8px;padding:9px;font-size:12px}.s-card .s-btns .sb svg{width:12px;height:12px}}
+.s-btns .sb{transition:transform .22s cubic-bezier(.2,.8,.2,1)}
+@media (hover:hover) and (pointer:fine){.s-btns .sb:hover{transform:scale(1.04)}}
 .srv-name{font-size:11px;color:var(--muted);margin:0 0 6px 2px}
 
 /* download-only (10Gbps) servers: one full-width button */
