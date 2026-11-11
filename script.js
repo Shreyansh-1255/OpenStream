@@ -637,10 +637,10 @@ const isDownloadOnly = label => /^10\s*-?\s*gbps$/i.test(String(label || '').tri
 function streamButtons(m, label, dlOnly) {
   const play = IS_IOS ? 'Play in Outplayer' : 'Play in MPV';
   const name = label ? `<div class="srv-name">${esc(label)}</div>` : '';
-  if (dlOnly) return name + `<div class="s-btns one"><button type="button" class="sb" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link">${ICONS.copy} Copy link (download only)</button></div>`;
-  return name + `<div class="s-btns">` +
-    `<button type="button" class="sb" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link">${ICONS.copy} Copy link</button>` +
-    `<button type="button" class="sb play" data-url="${esc(m.url)}" onclick="playExternal(this)">${ICONS.play} ${play}</button></div>`;
+  const copy = (txt) => `<button type="button" class="sb dl" data-url="${esc(m.url)}" onclick="copyLink(this)" aria-label="Copy original link">${ICONS.copy} ${txt}</button>`;
+  if (dlOnly) return name + `<div class="s-btns one">${copy('Copy link (download only)')}</div>`;
+  if (!IS_IOS && !IS_ANDROID) return name + `<div class="s-btns one">${copy('Copy link')}</div>`;
+  return name + `<div class="s-btns"><button type="button" class="sb vlc" data-url="${esc(m.url)}" onclick="playExternal(this)">${ICONS.play} ${play}</button>${copy('Copy link')}</div>`;
 }
 function serverRow(buttons) {
   return `<div class="srv">${buttons}</div>`;
@@ -1554,14 +1554,13 @@ function fmtEpDate(v) {
   const d = new Date(v);
   return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
-function epRating(ep) { const n = parseFloat(ep.rating ?? ep.imdbRating); return n > 0 ? n.toFixed(1) : ''; }
 
 function episodeMeta(ep) {
   const raw = ep.released || ep.firstAired;
-  const d = fmtEpDate(raw), r = epRating(ep);
-  if (!d && !r) return '';
+  const d = fmtEpDate(raw);
+  if (!d) return '';
   const soon = d && isUpcoming(raw) ? ' <em class="ep-soon">(Upcoming)</em>' : '';
-  return `<div class="episode-meta">${d ? `<span class="ep-date">${ICONS.calendar}<span>${esc(d)}${soon}</span></span>` : ''}${r ? `<span class="ep-rate">${ICONS.imdb}<b>${esc(r)}</b></span>` : ''}</div>`;
+  return `<div class="episode-meta">${d ? `<span class="ep-date">${ICONS.calendar}<span>${esc(d)}${soon}</span></span>` : ''}</div>`;
 }
 
 function renderEpisodes(meta) {
@@ -1731,6 +1730,7 @@ function openSettings() {
   renderAddonList();
   addonInput.value = '';
   setStatus('');
+  updateInstallBox();
   syncTorrentSwitch();
   setOverlay.classList.add('open');
   document.body.classList.add('lock');
@@ -1805,6 +1805,9 @@ torrentSwitch.addEventListener('click', () => {
 });
 syncTorrentSwitch();
 
+const installBox = document.getElementById('installBox');
+const installBtn = document.getElementById('installBtn');
+const installHint = document.getElementById('installHint');
 const dbFile = document.getElementById('dbFile');
 // keep only known fields of an imported addon and re-validate its URL
 function sanitizeAddon(a) {
@@ -1869,6 +1872,49 @@ dbFile.addEventListener('change', async () => {
     setStatus(`Imported ${plural(addedA, 'addon')} and ${plural(addedW, 'title')}` + (dup ? `, ${dup} already here` : '') + (bad ? `, ${bad} invalid skipped` : '') + '.', (addedA || addedW) ? 'ok' : '');
   } catch (_) { setStatus('That file is not a valid OpenStream database backup.', 'err'); }
 });
+
+/* ---------- Install as app (PWA) ---------- */
+let deferredInstall = null;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+window.addEventListener('appinstalled', () => { deferredInstall = null; updateInstallBox(); });
+function updateInstallBox() {
+  installBox.style.display = isStandalone() ? 'none' : '';
+  installBtn.style.display = deferredInstall ? '' : 'none';
+  installHint.textContent = deferredInstall ? '' : (IS_IOS ? 'To install: tap Share, then "Add to Home Screen".' : 'To install: open your browser menu, then choose "Install app" or "Add to Home screen".');
+}
+installBtn.addEventListener('click', async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  try { await deferredInstall.userChoice; } catch (_) {}
+  deferredInstall = null;
+  updateInstallBox();
+});
+function drawIcon(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const x = c.getContext('2d');
+  x.fillStyle = '#100e0c'; x.fillRect(0, 0, size, size);
+  const pad = size * 0.2;
+  x.translate(pad, pad); x.scale((size - 2 * pad) / 24, (size - 2 * pad) / 24);
+  x.strokeStyle = '#cda24e'; x.lineWidth = 2; x.lineCap = 'round'; x.lineJoin = 'round';
+  x.stroke(new Path2D('M3 3h18v18H3z'));
+  x.stroke(new Path2D('M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4'));
+  return c.toDataURL('image/png');
+}
+function setupPwa() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  try {
+    const i192 = drawIcon(192), i512 = drawIcon(512);
+    const link = (rel, href) => { const l = document.createElement('link'); l.rel = rel; l.href = href; document.head.appendChild(l); };
+    link('icon', i192);
+    link('apple-touch-icon', i192);
+    const manifest = { name: 'OpenStream', short_name: 'OpenStream', start_url: location.origin + '/', scope: location.origin + '/', display: 'standalone', background_color: '#100e0c', theme_color: '#100e0c',
+      icons: [{ src: i192, sizes: '192x192', type: 'image/png', purpose: 'any maskable' }, { src: i512, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }] };
+    link('manifest', URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' })));
+  } catch (_) {}
+}
+setupPwa();
 
 // Hide broken poster images instead of showing the browser's broken-image icon
 document.addEventListener('error', e => {
